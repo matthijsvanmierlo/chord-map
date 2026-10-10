@@ -25,12 +25,10 @@ Any static server works, for example `npx serve` or the VS Code "Live Server" ex
 ## Deploy to GitHub Pages
 
 1. Push this folder to a GitHub repository (default branch `main`).
-2. Go to **Settings → Pages → Build and deployment → Source** and choose **GitHub Actions**.
-3. The included workflow `.github/workflows/pages.yml` runs the unit and end-to-end tests, then publishes the site.
+2. Go to **Settings → Pages → Build and deployment → Source**, choose **Deploy from a branch**, and select **main** / **(root)**.
+3. Before pushing, run the tests locally (`scripts/run-tests.sh` and `scripts/run-e2e.sh`) and `python3 scripts/update-sw.py`.
 
 All paths are relative and routing uses the URL hash (`#/explore`), so the app works from a sub-path such as `https://you.github.io/guitarchords/` without any rewrite rules. `.nojekyll` stops Pages from processing the files.
-
-Alternatively, choose **Deploy from a branch → main / (root)** to skip the workflow.
 
 ## Third-party libraries (CDN + local copies)
 
