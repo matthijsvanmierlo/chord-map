@@ -4,11 +4,18 @@ import { parseChord } from './chordParser.js';
 import { tuningMidi, instrumentOf } from './tunings.js';
 import { CURATED, MOVABLE } from './voicingLibrary.js';
 import { mod12 } from './theory.js';
+import { applyVoicingPrefs, isDefaultPrefs } from './voicingPrefs.js';
 
 /** @typedef {{frets:number[], fingers:number[], barre:{fret:number,from:number,to:number}|null, baseFret:number, id:string, curated?:boolean, score?:number}} Voicing */
 
 const MAX_SPAN = 3; // highest fretted − lowest fretted (i.e. 4 frets)
 const cache = new Map();
+let defaultPrefs = null;
+
+/** App-wide shape preferences (from settings); used when a call passes no `prefs`. */
+export function setDefaultVoicingPrefs(prefs) {
+  defaultPrefs = isDefaultPrefs(prefs) ? null : prefs;
+}
 
 /** Importance order when an instrument has fewer strings than chord tones. */
 const PRIORITY = ['3', 'b3', '4', '2', 'b7', '7', 'bb7', 'b9', '#9', '#11', 'b13', 'b5', '#5', '6', '13', '1', '9', '11', '5'];
@@ -89,19 +96,33 @@ function requiredSets(chord, stringCount) {
  * Generate playable voicings, best first.
  * @param {string} symbol chord symbol
  * @param {import('./tunings.js').Tuning} tuning
- * @param {{capo?:number, limit?:number}} opts
+ * @param {{capo?:number, limit?:number, prefs?:object|null}} opts  prefs: undefined = app default, null = none
  * @returns {Voicing[]}
  */
-export function getVoicings(symbol, tuning, { capo = 0, limit = 24 } = {}) {
-  const chord = parseChord(symbol);
-  if (!chord || chord.nc) return [];
-  const key = `${tuning.id}|${tuning.strings.join(' ')}|${capo}|${chord.symbol}|${limit}`;
-  if (cache.has(key)) return cache.get(key);
+export function getVoicings(symbol, tuning, opts = {}) {
+  return getVoicingsInfo(symbol, tuning, opts).list;
+}
 
+/** Like getVoicings, but also reports whether the preferences had to be relaxed. */
+export function getVoicingsInfo(symbol, tuning, { capo = 0, limit = 24, prefs } = {}) {
+  const chord = parseChord(symbol);
+  if (!chord || chord.nc) return { list: [], relaxed: false };
+  const p = prefs === undefined ? defaultPrefs : prefs;
+  const key = `${tuning.id}|${tuning.strings.join(' ')}|${capo}|${chord.symbol}|${limit}|${isDefaultPrefs(p) ? '' : JSON.stringify(p)}`;
+  if (cache.has(key)) return cache.get(key);
+  const { list, relaxed } = applyVoicingPrefs(allVoicings(chord, tuning, capo), p, chord, tuning, capo);
+  const out = { list: list.slice(0, limit), relaxed };
+  cache.set(key, out);
+  return out;
+}
+
+/** Every voicing found for a chord (curated first), cached. */
+function allVoicings(chord, tuning, capo) {
+  const key = `all|${tuning.id}|${tuning.strings.join(' ')}|${capo}|${chord.symbol}`;
+  if (cache.has(key)) return cache.get(key);
   const curated = curatedFor(chord, tuning, capo);
-  const generated = search(chord, tuning, capo);
   const seen = new Set(curated.map((v) => v.id));
-  const out = [...curated, ...generated.filter((v) => !seen.has(v.id))].slice(0, limit);
+  const out = [...curated, ...search(chord, tuning, capo).filter((v) => !seen.has(v.id))];
   cache.set(key, out);
   return out;
 }
@@ -131,7 +152,8 @@ function search(chord, tuning, capo) {
   const { required, optional } = requiredSets(chord, n);
   const chordPcs = new Set(chord.pcs);
   const bassPc = chord.bassPc ?? chord.rootPc;
-  const minPlayed = n <= 4 ? n - 1 : Math.max(3, Math.min(4, required.length + 1));
+  // 3 strings minimum so shells/triads exist; fuller shapes still score higher
+  const minPlayed = n <= 4 ? n - 1 : 3;
   const results = new Map();
 
   // familiar movable shapes first (they get a "familiarity" bonus)
@@ -219,8 +241,8 @@ function search(chord, tuning, capo) {
 }
 
 /** Pick the default voicing for a chord, optionally closest to a previous voicing. */
-export function defaultVoicing(symbol, tuning, { capo = 0, previous = null, smooth = false } = {}) {
-  const list = getVoicings(symbol, tuning, { capo });
+export function defaultVoicing(symbol, tuning, { capo = 0, previous = null, smooth = false, prefs } = {}) {
+  const list = getVoicings(symbol, tuning, { capo, prefs });
   if (!list.length) return null;
   if (!smooth || !previous) return list[0];
   const cands = list.slice(0, 6);
@@ -233,15 +255,16 @@ export function defaultVoicing(symbol, tuning, { capo = 0, previous = null, smoo
 }
 
 /** Resolve the voicing to display for a song chord (locked id or default). */
-export function resolveVoicing(symbol, tuning, { capo = 0, voicingId: vid = null, previous = null, smooth = false } = {}) {
+export function resolveVoicing(symbol, tuning, { capo = 0, voicingId: vid = null, previous = null, smooth = false, prefs } = {}) {
   if (vid) {
     const frets = parseVoicingId(vid, tuning.strings.length);
     if (frets) {
-      const fromList = getVoicings(symbol, tuning, { capo }).find((v) => v.id === vid);
+      const chord = parseChord(symbol);
+      const fromList = chord && !chord.nc ? allVoicings(chord, tuning, capo).find((v) => v.id === vid) : null;
       return fromList || analyseShape(frets);
     }
   }
-  return defaultVoicing(symbol, tuning, { capo, previous, smooth });
+  return defaultVoicing(symbol, tuning, { capo, previous, smooth, prefs });
 }
 
 /** Sounding MIDI notes of a voicing (low → high by string order). */

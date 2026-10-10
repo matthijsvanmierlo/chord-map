@@ -78,10 +78,12 @@ async function boot() {
     if (reason === 'settings' || reason === 'replaced' || reason === 'external') {
       applyTheme();
       player.setVolume(s.settings.volume);
+      player.setMix(s.settings.mix);
     }
     if (reason === 'external') rerender();
   });
   player.volume = getSettings().volume;
+  player.mix = { ...getSettings().mix };
   setupInstrumentSwitch();
   setupSaveStatus();
   checkBanners(report);

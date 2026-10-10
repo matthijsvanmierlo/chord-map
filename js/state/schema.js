@@ -6,7 +6,10 @@ import { parseNote, MODES } from '../music/theory.js';
 import { validTuning } from '../music/tunings.js';
 
 export const APP_ID = 'fretboard-progressions';
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
+
+/** Max practice-log entries kept individually; older ones are folded into totals. */
+export const PRACTICE_LOG_LIMIT = 5000;
 
 export function newId() {
   if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
@@ -19,7 +22,7 @@ export function defaultSettings() {
     instrumentId: 'guitar-standard',
     leftHanded: false,
     chordDisplay: 'chords',        // chords | roman | both
-    notation: { diagrams: true, staff: true, tab: true },
+    notation: { diagrams: true, staff: true, tab: true, lyrics: true },
     smoothVoicing: false,
     volume: 70,                    // 0–100
     metronome: true,
@@ -27,9 +30,22 @@ export function defaultSettings() {
     announceChords: true,
     localLibsOnly: false,
     customTunings: [],
+    customPatterns: [],
     favorites: [],
+    voicing: defaultVoicingPrefs(),
+    metronomeSubdivision: 1,       // clicks per beat: 1 | 2 | 3 | 4
+    mix: { chords: 80, bass: 70, drums: 60, click: 70 },
   };
 }
+
+/** Chord-shape preferences (global in settings, optional per-song override). */
+export function defaultVoicingPrefs() {
+  return { minFret: 0, maxFret: 15, preferOpen: true, style: 'any', avoidBarre: false, maxStretch: 4 };
+}
+
+export const VOICING_STYLES = ['any', 'triads', 'shell', 'drop2', 'drop3'];
+export const PRACTICE_KINDS = ['practice', 'drill', 'quiz', 'flashcard'];
+const PATTERN_TOKENS = new Set(['D', 'U', 'd', 'B', 'b', '1', '2', '3', '4', '.']);
 
 export function defaultMeta() {
   return { lastBackupAt: null, lastSongId: null, tourDone: false, createdAt: new Date().toISOString() };
@@ -106,7 +122,10 @@ export function sanitizeSong(raw) {
           voicingId: typeof c?.voicingId === 'string' && c.voicingId.length < 80 ? c.voicingId : null,
         };
       });
-      return { id: uid(bar?.id), chords };
+      const bar2 = { id: uid(bar?.id), chords };
+      const lyric = str(bar?.lyric, 500).replace(/[\r\n]+/g, ' ');
+      if (lyric.trim()) bar2.lyric = lyric;
+      return bar2;
     });
     return { id: uid(sec?.id), name: str(sec?.name, 60, `Section ${si + 1}`) || `Section ${si + 1}`, repeat: clamp(sec?.repeat, 1, 16, 1), bars };
   });
@@ -129,6 +148,8 @@ export function sanitizeSong(raw) {
     instrumentId: str(raw.instrumentId, 80, 'guitar-standard') || 'guitar-standard',
     capo: clamp(raw.capo, 0, 12, 0),
     strumPatternId: str(raw.strumPatternId, 60, 'quarters') || 'quarters',
+    groove: /^[\w-]{1,40}$/.test(raw.groove || '') ? raw.groove : 'none',
+    voicingPrefs: raw.voicingPrefs && typeof raw.voicingPrefs === 'object' ? sanitizeVoicingPrefs(raw.voicingPrefs) : null,
     sections,
     form,
     sourcePresetId: typeof raw.sourcePresetId === 'string' ? raw.sourcePresetId.slice(0, 80) : null,
@@ -156,6 +177,119 @@ export function sanitizeSettings(raw) {
   out.customTunings = (Array.isArray(raw.customTunings) ? raw.customTunings : []).filter(validTuning).slice(0, 50)
     .map((t) => ({ id: String(t.id).slice(0, 80), name: String(t.name).slice(0, 80), instrument: ['guitar', 'ukulele', 'other'].includes(t.instrument) ? t.instrument : 'other', strings: t.strings.map(String), frets: clamp(t.frets, 5, 24, 15) }));
   out.favorites = (Array.isArray(raw.favorites) ? raw.favorites : []).filter((x) => typeof x === 'string').slice(0, 1000);
+  out.customPatterns = (Array.isArray(raw.customPatterns) ? raw.customPatterns : []).map(sanitizePattern).filter(Boolean).slice(0, 100);
+  out.voicing = sanitizeVoicingPrefs(raw.voicing);
+  out.metronomeSubdivision = [1, 2, 3, 4].includes(raw.metronomeSubdivision) ? raw.metronomeSubdivision : 1;
+  out.mix = { ...d.mix };
+  if (raw.mix && typeof raw.mix === 'object') for (const k of Object.keys(d.mix)) out.mix[k] = clamp(raw.mix[k], 0, 100, d.mix[k]);
+  return out;
+}
+
+export function sanitizeVoicingPrefs(raw) {
+  const d = defaultVoicingPrefs();
+  if (!raw || typeof raw !== 'object') return d;
+  const minFret = clamp(raw.minFret, 0, 20, d.minFret);
+  return {
+    minFret,
+    maxFret: Math.max(minFret + 3, clamp(raw.maxFret, 3, 24, d.maxFret)),
+    preferOpen: typeof raw.preferOpen === 'boolean' ? raw.preferOpen : d.preferOpen,
+    style: VOICING_STYLES.includes(raw.style) ? raw.style : d.style,
+    avoidBarre: !!raw.avoidBarre,
+    maxStretch: clamp(raw.maxStretch, 2, 5, d.maxStretch),
+  };
+}
+
+/** Custom strum pattern: same shape as built-ins in data/strumPatterns.js. Returns null if invalid. */
+export function sanitizePattern(raw) {
+  if (!raw || typeof raw !== 'object' || typeof raw.slots !== 'string') return null;
+  const tokens = raw.slots.trim().split(/\s+/).slice(0, 64);
+  if (!tokens.length || !tokens.every((t) => PATTERN_TOKENS.has(t))) return null;
+  const meter = Array.isArray(raw.meter) && raw.meter.length === 2
+    ? [clamp(raw.meter[0], 1, 16, 4), [2, 4, 8, 16].includes(Number(raw.meter[1])) ? Number(raw.meter[1]) : 4]
+    : null;
+  return {
+    id: /^custom-[\w-]{1,60}$/.test(raw.id || '') ? raw.id : `custom-${newId().slice(0, 8)}`,
+    name: str(raw.name, 60, 'My pattern').trim() || 'My pattern',
+    meter,
+    perBeat: clamp(raw.perBeat, 1, 4, 2),
+    slots: tokens.join(' '),
+    swing: !!raw.swing,
+    custom: true,
+  };
+}
+
+export function newSetlist(name = 'New setlist', songIds = []) {
+  const now = new Date().toISOString();
+  return { id: newId(), name, songIds, createdAt: now, updatedAt: now };
+}
+
+export function sanitizeSetlist(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const now = new Date().toISOString();
+  return {
+    id: typeof raw.id === 'string' && raw.id ? raw.id.slice(0, 80) : newId(),
+    name: str(raw.name, 120, 'Setlist').trim() || 'Setlist',
+    songIds: [...new Set((Array.isArray(raw.songIds) ? raw.songIds : []).filter((x) => typeof x === 'string').map((x) => x.slice(0, 80)))].slice(0, 500),
+    createdAt: isoOr(raw.createdAt, now),
+    updatedAt: isoOr(raw.updatedAt, now),
+  };
+}
+
+export function sanitizePracticeEntry(raw) {
+  if (!raw || typeof raw !== 'object' || !PRACTICE_KINDS.includes(raw.kind)) return null;
+  const date = isoOr(raw.date, null);
+  if (!date) return null;
+  const e = {
+    id: typeof raw.id === 'string' && raw.id ? raw.id.slice(0, 80) : newId(),
+    kind: raw.kind,
+    ref: str(raw.ref, 120),
+    date,
+    seconds: clamp(raw.seconds, 0, 24 * 3600, 0),
+  };
+  if (raw.tempoStart != null) e.tempoStart = clamp(raw.tempoStart, 20, 400, 90);
+  if (raw.tempoEnd != null) e.tempoEnd = clamp(raw.tempoEnd, 20, 400, 90);
+  if (raw.score != null && Number.isFinite(Number(raw.score))) e.score = Math.max(0, Math.min(100000, Math.round(Number(raw.score))));
+  if (raw.total != null && Number.isFinite(Number(raw.total))) e.total = Math.max(0, Math.min(100000, Math.round(Number(raw.total))));
+  if (typeof raw.detail === 'string' && raw.detail) e.detail = raw.detail.slice(0, 200);
+  return e;
+}
+
+export function defaultPracticeTotals() {
+  return { seconds: 0, entries: 0, byRef: {} };
+}
+
+function sanitizeTotals(raw) {
+  const d = defaultPracticeTotals();
+  if (!raw || typeof raw !== 'object') return d;
+  const byRef = {};
+  if (raw.byRef && typeof raw.byRef === 'object') {
+    for (const [k, v] of Object.entries(raw.byRef).slice(0, 5000)) byRef[String(k).slice(0, 120)] = clamp(v, 0, 1e9, 0);
+  }
+  return { seconds: clamp(raw.seconds, 0, 1e9, 0), entries: clamp(raw.entries, 0, 1e9, 0), byRef };
+}
+
+/** Keep the newest PRACTICE_LOG_LIMIT entries; fold older ones into totals. */
+export function capPracticeLog(log, totals) {
+  const sorted = [...log].sort((a, b) => a.date.localeCompare(b.date));
+  if (sorted.length <= PRACTICE_LOG_LIMIT) return { practiceLog: sorted, practiceTotals: totals };
+  const old = sorted.slice(0, sorted.length - PRACTICE_LOG_LIMIT);
+  const t = { seconds: totals.seconds, entries: totals.entries, byRef: { ...totals.byRef } };
+  for (const e of old) {
+    t.seconds += e.seconds;
+    t.entries += 1;
+    if (e.ref) t.byRef[e.ref] = (t.byRef[e.ref] || 0) + e.seconds;
+  }
+  return { practiceLog: sorted.slice(-PRACTICE_LOG_LIMIT), practiceTotals: t };
+}
+
+/** Flashcard Leitner state: { cardKey: { box: 1–5, due: ISO date } }. */
+export function sanitizeFlashcards(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [k, v] of Object.entries(raw).slice(0, 5000)) {
+    if (!v || typeof v !== 'object') continue;
+    out[String(k).slice(0, 120)] = { box: clamp(v.box, 1, 5, 1), due: isoOr(v.due, new Date(0).toISOString()) };
+  }
   return out;
 }
 
@@ -174,8 +308,13 @@ export function sanitizeMeta(raw) {
 export function migrate(data) {
   const v = Number(data?.schemaVersion) || 1;
   if (v > SCHEMA_VERSION) throw new Error(`This file was made by a newer version of the app (schema ${v}). Please update the app.`);
-  // v1 is current — future: if (v < 2) { ...transform...; data.schemaVersion = 2; }
-  return data;
+  if (v < 2) {
+    // v2 adds setlists, practice log, flashcards, grooves, lyrics, voicing prefs and custom
+    // strum patterns. All are optional with defaults, so v1 data needs no transformation —
+    // the sanitizers fill them in. Future steps transform here: if (v < 3) { … }
+    data = { ...data, setlists: data.setlists || [], practiceLog: data.practiceLog || [], flashcards: data.flashcards || {} };
+  }
+  return { ...data, schemaVersion: SCHEMA_VERSION };
 }
 
 /** Full application state from untrusted stored/imported data. */
@@ -192,5 +331,11 @@ export function sanitizeState(raw) {
       warnings.push(`Skipped an invalid song (${e.message})`);
     }
   }
-  return { songs, settings: sanitizeSettings(data.settings), meta: sanitizeMeta(data.meta), warnings };
+  const setlists = (Array.isArray(data.setlists) ? data.setlists : []).map(sanitizeSetlist).filter(Boolean).slice(0, 500);
+  const log = (Array.isArray(data.practiceLog) ? data.practiceLog : []).map(sanitizePracticeEntry).filter(Boolean);
+  const { practiceLog, practiceTotals } = capPracticeLog(log, sanitizeTotals(data.practiceTotals));
+  return {
+    songs, settings: sanitizeSettings(data.settings), meta: sanitizeMeta(data.meta),
+    setlists, practiceLog, practiceTotals, flashcards: sanitizeFlashcards(data.flashcards), warnings,
+  };
 }

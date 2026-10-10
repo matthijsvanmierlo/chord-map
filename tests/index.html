@@ -7,7 +7,7 @@
 <div id="results">Running…</div>
 <script type="module">
   import { report } from './harness.js';
-  const files = ['theory', 'chords', 'roman', 'voicings', 'presets', 'schema', 'exports'];
+  const files = ['theory', 'chords', 'roman', 'voicings', 'presets', 'schema', 'migration', 'exports', 'engines', 'formats', 'band', 'train'];
   for (const f of files) {
     try { await import(`./${f}.test.js`); }
     catch (e) {
@@ -15,7 +15,7 @@
       test(`load ${f}.test.js`, () => { throw e; });
     }
   }
-  report();
+  await report();
 </script>
 </body>
 </html>

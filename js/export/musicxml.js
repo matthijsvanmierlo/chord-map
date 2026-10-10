@@ -1,5 +1,6 @@
 // MusicXML 4.0 (partwise) export: chord symbols (<harmony>), notated chord
 // voicings on a treble staff and the same voicings on a TAB staff.
+import { songPrefs } from '../music/voicingPrefs.js';
 import { playOrder } from '../music/song.js';
 import { parseChord } from '../music/chordParser.js';
 import { resolveVoicing, voicingMidi } from '../music/voicingEngine.js';
@@ -100,7 +101,7 @@ export function toMusicXML(song, tuning, { smooth = false } = {}) {
         if (lenBeats <= 0) return;
         const pieces = splitDuration(lenBeats, den);
         if (chord) staffNotes.push(harmonyXml(chord));
-        const v = chord && !chord.nc ? resolveVoicing(c.symbol, tuning, { capo, voicingId: c.voicingId, previous: prev, smooth }) : null;
+        const v = chord && !chord.nc ? resolveVoicing(c.symbol, tuning, { capo, voicingId: c.voicingId, previous: prev, smooth, prefs: songPrefs(song) }) : null;
         if (v) prev = v;
         if (!v) { emitRest(pieces.reduce((s, p) => s + p.len, 0)); used += pieces.reduce((s, p) => s + p.len, 0); return; }
         const pcName = new Map(chord.tones.map((t) => [t.pc, t.name]));

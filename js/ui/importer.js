@@ -1,7 +1,8 @@
 // Import flow shared by My Songs and Settings: JSON backups / song files,
 // ChordPro files and plain-text chord charts. Validates fully before writing.
-import { parseImport, previewMerge, mergeSongs } from '../export/backup.js';
+import { parseImport, previewMerge, mergeSongs, mergeSetlists, mergePracticeLog, mergeFlashcards } from '../export/backup.js';
 import { fromChordPro } from '../export/chordpro.js';
+import { fromMusicXML } from '../export/musicxmlImport.js';
 import { parseBarText } from '../music/roman.js';
 import { parseChord } from '../music/chordParser.js';
 import { newSong, newSection, newBar } from '../state/schema.js';
@@ -42,7 +43,7 @@ async function importJson(text, name) {
   const p = previewMerge(existing, data.songs);
   const isBackup = data.kind === 'backup';
   const body = `
-    <p>File <strong>${escapeHtml(name)}</strong> contains <strong>${p.total}</strong> song${p.total === 1 ? '' : 's'}${isBackup ? ' and app settings' : ''}.</p>
+    <p>File <strong>${escapeHtml(name)}</strong> contains <strong>${p.total}</strong> song${p.total === 1 ? '' : 's'}${data.setlists.length ? `, ${data.setlists.length} setlist${data.setlists.length === 1 ? '' : 's'}` : ''}${data.practiceLog.length ? `, ${data.practiceLog.length} practice-log entr${data.practiceLog.length === 1 ? 'y' : 'ies'}` : ''}${isBackup ? ' and app settings' : ''}.</p>
     <ul class="small">
       <li>${p.added} new</li>
       ${p.newer ? `<li>${p.newer} newer than your copy</li>` : ''}
@@ -69,12 +70,23 @@ async function importJson(text, name) {
   });
   if (!choice) return 0;
   if (choice.mode === 'replace') {
-    replaceAll({ songs: data.songs, settings: data.settings, meta: { ...getState().meta, lastSongId: null } });
+    replaceAll({
+      songs: data.songs, settings: data.settings, meta: { ...getState().meta, lastSongId: null },
+      setlists: data.setlists, practiceLog: data.practiceLog, practiceTotals: data.practiceTotals, flashcards: data.flashcards,
+    });
     toast(`Replaced all data: ${data.songs.length} songs`, { type: 'success' });
     return data.songs.length;
   }
   const merged = mergeSongs(existing, data.songs, choice.mode);
-  replaceAll({ songs: merged, settings: choice.settings && data.settings ? data.settings : getState().settings, meta: getState().meta });
+  const st = getState();
+  replaceAll({
+    songs: merged,
+    settings: choice.settings && data.settings ? data.settings : st.settings,
+    meta: st.meta,
+    setlists: mergeSetlists(st.setlists, data.setlists),
+    ...mergePracticeLog(st.practiceLog, data.practiceLog, st.practiceTotals),
+    flashcards: mergeFlashcards(st.flashcards, data.flashcards),
+  });
   if (choice.settings && data.settings) updateSettings({});
   toast(`Imported ${p.total} song${p.total === 1 ? '' : 's'}`, { type: 'success' });
   return p.total;
@@ -91,8 +103,22 @@ export async function importFiles(files) {
   for (const file of files) {
     try {
       if (file.size > 10 * 1024 * 1024) throw new Error('File is larger than 10 MB.');
-      const text = await readFileText(file);
       const name = file.name || 'file';
+      if (/\.mxl$/i.test(name)) {
+        const { song, warnings } = await fromMusicXML(new Uint8Array(await file.arrayBuffer()));
+        saveSong(song, { touch: false });
+        count++;
+        toast(`Imported “${song.title}” from MusicXML${warnings.length ? ` (${warnings.length} note(s))` : ''}`);
+        continue;
+      }
+      const text = await readFileText(file);
+      if (/\.(musicxml|xml)$/i.test(name) || /<score-(partwise|timewise)/.test(text.slice(0, 2000))) {
+        const { song, warnings } = await fromMusicXML(text);
+        saveSong(song, { touch: false });
+        count++;
+        toast(`Imported “${song.title}” from MusicXML${warnings.length ? ` (${warnings.length} note(s))` : ''}`);
+        continue;
+      }
       if (/\.json$/i.test(name) || looksLikeJson(text)) {
         count += await importJson(text, name);
       } else if (/\{(title|t|start_of|soc|sov)\b|\[[A-G]/.test(text)) {

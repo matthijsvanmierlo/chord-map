@@ -5,10 +5,19 @@ let current = '';
 
 export function describe(name, fn) { current = name; fn(); current = ''; }
 
+const pending = [];
+
+/** Sync or async test. Results keep declaration order. */
 export function test(name, fn) {
   const full = current ? `${current} › ${name}` : name;
-  try { fn(); results.push({ name: full, ok: true }); }
-  catch (e) { results.push({ name: full, ok: false, error: e.message }); }
+  const row = { name: full, ok: true };
+  results.push(row);
+  try {
+    const r = fn();
+    if (r && typeof r.then === 'function') {
+      pending.push(r.then(() => {}, (e) => { row.ok = false; row.error = e.message; }));
+    }
+  } catch (e) { row.ok = false; row.error = e.message; }
 }
 
 export function eq(actual, expected, msg = '') {
@@ -18,7 +27,8 @@ export function eq(actual, expected, msg = '') {
 
 export function ok(cond, msg = 'assertion failed') { if (!cond) throw new Error(msg); }
 
-export function report() {
+export async function report() {
+  await Promise.all(pending);
   const failed = results.filter((r) => !r.ok);
   const out = document.getElementById('results');
   out.innerHTML = '';

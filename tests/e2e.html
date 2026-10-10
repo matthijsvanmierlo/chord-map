@@ -144,6 +144,220 @@ Run headless: <code>chromium --headless --autoplay-policy=no-user-gesture-requir
     await waitFor(() => /Start/.test($('#play').textContent), 3000, 'stopped');
   });
 
+  await step('practice: backing band plays bass + drums and the mixer responds', async () => {
+    await go(`#/practice/${songId}`);
+    await waitFor(() => $('#o-groove'), 4000, 'groove select');
+    setVal($('#o-groove'), 'rock');
+    await sleep(300);
+    assert(stored().songs.find((x) => x.id === songId).groove === 'rock', 'groove not saved to song');
+    $('#o-countin').checked && $('#o-countin').click();
+    await click('#play');
+    await waitFor(() => /Stop/.test($('#play').textContent), 6000, 'playing');
+    const { player } = await appModule('js/audio/player.js');
+    assert(player.band.drums > 0 && player.band.bass > 0, `band ${JSON.stringify(player.band)}`);
+    const bassSlider = $('#pr-mix-bass');
+    bassSlider.value = '10'; bassSlider.dispatchEvent(new Event('input', { bubbles: true }));
+    assert(player.mix.bass === 10, 'mixer not applied');
+    bassSlider.dispatchEvent(new Event('change', { bubbles: true }));
+    await click('#play');
+    await sleep(400);
+    assert(stored().settings.mix.bass === 10, 'mix not saved');
+  });
+
+  await step('custom strum pattern: create in Settings, appears in the editor', async () => {
+    await go('#/settings');
+    await click('[data-act="add-pattern"]');
+    const firstStep = await waitFor(() => D().querySelector('.modal.show [data-step="0"]'), 5000, 'pattern grid');
+    D().querySelector('.modal.show #pe-name').value = 'E2E pattern';
+    firstStep.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', bubbles: true }));
+    await sleep(100);
+    assert(/bass note/.test(D().querySelector('.modal.show [data-step="0"]').getAttribute('aria-label')), 'keyboard edit failed');
+    await click(() => [...D().querySelectorAll('.modal.show .modal-footer .btn-primary')].find((b) => /Save/.test(b.textContent)));
+    await waitFor(() => (stored().settings.customPatterns || []).some((p) => p.name === 'E2E pattern' && p.slots.startsWith('B ')), 4000, 'pattern saved');
+    await go(`#/song/${songId}`);
+    await waitFor(() => [...$('#f-pattern').options].some((o) => /E2E pattern/.test(o.textContent)), 4000, 'pattern in editor');
+  });
+
+  await step('editor: tap tempo sets the tempo', async () => {
+    const btn = await waitFor(() => $('[data-act="tap"]'), 4000, 'tap button');
+    for (let i = 0; i < 4; i++) { btn.click(); await sleep(400); }
+    const v = Number($('#f-tempo').value);
+    assert(v >= 130 && v <= 170, `tapped tempo ${v}`);
+    await sleep(1700);
+    assert(Math.abs(stored().songs.find((x) => x.id === songId).tempo - v) <= 1, 'tempo not committed');
+  });
+
+  await step('lyrics: typed in the editor, shown chords-over-words in the sheet', async () => {
+    await go(`#/song/${songId}`);
+    await click('[data-act="lyrics"]');
+    const input = await waitFor(() => $('[data-lyric]'), 4000, 'lyric input');
+    input.value = 'Hello darkness'; input.dispatchEvent(new Event('change', { bubbles: true }));
+    await sleep(300);
+    assert(stored().songs.find((x) => x.id === songId).sections[0].bars[0].lyric === 'Hello darkness', 'lyric not saved');
+    await waitFor(() => /Hello darkness/.test($('#preview .lyric-sheet')?.textContent || ''), 5000, 'lyric sheet');
+  });
+
+  await step('reharmonisation idea applies and undoes', async () => {
+    const before = stored().songs.find((x) => x.id === songId).sections[0].bars[0].chords[0].symbol;
+    await click('.chord-pill');
+    const det = await waitFor(() => D().querySelector('#chord-editor #ce-ideas-d'), 4000, 'ideas section');
+    det.open = true;
+    const apply = await waitFor(() => D().querySelector('#chord-editor [data-idea-apply]'), 4000, 'an idea');
+    apply.click();
+    await waitFor(() => !D().querySelector('#chord-editor'), 4000, 'panel closed');
+    const bar0 = () => stored().songs.find((x) => x.id === songId).sections[0].bars[0].chords.map((c) => c.symbol).join(' ');
+    await waitFor(() => bar0() !== before, 3000, 'idea applied');
+    await click('[data-act="undo"]');
+    await waitFor(() => bar0() === before, 3000, 'undo restored');
+  });
+
+  await step('capo helper and shape preferences', async () => {
+    await click('[data-act="capo-suggest"]');
+    const radio = await waitFor(() => D().querySelector('.modal.show input[name="capo-pick"]:checked'), 4000, 'capo dialog');
+    const want = Number(radio.value);
+    await click(() => [...D().querySelectorAll('.modal.show .modal-footer .btn-primary')][0]);
+    await waitFor(() => stored().songs.find((x) => x.id === songId).capo === want, 4000, `capo ${want} applied`);
+    await click('[data-act="shapes"]');
+    const def = await waitFor(() => D().querySelector('.modal.show #vp-default'), 4000, 'shapes dialog');
+    def.click(); await sleep(50);
+    setVal(D().querySelector('.modal.show #svp-style'), 'drop2');
+    await click(() => [...D().querySelectorAll('.modal.show .modal-footer .btn-primary')][0]);
+    await waitFor(() => stored().songs.find((x) => x.id === songId).voicingPrefs?.style === 'drop2', 4000, 'prefs saved');
+    await waitFor(() => /Drop-2/.test($('#shapes-btn').textContent), 3000, 'button label');
+  });
+
+  await step('chords page: fretboard & scales tab', async () => {
+    await go('#/chords?c=G7&tab=fretboard');
+    await waitFor(() => $('#pane-fretboard .fretboard'), 6000, 'fretboard svg');
+    assert(/Mixolydian/.test($('#pane-fretboard select').selectedOptions[0].textContent), 'scale suggestion');
+    setVal($('#pane-fretboard select[id$="-labels"]'), 'intervals');
+    await waitFor(() => [...$$('#pane-fretboard .fb-label')].some((t) => t.textContent === 'R'), 3000, 'interval labels');
+    assert($$('#pane-fretboard .fb-root').length >= 3, 'roots marked');
+  });
+
+  await step('share link round-trip saves a copy', async () => {
+    const { shareUrl } = await appModule('js/export/shareLink.js');
+    const song = stored().songs.find((x) => x.id === songId);
+    const url = await shareUrl(song);
+    const before = stored().songs.length;
+    W().location.hash = new URL(url).hash;
+    await waitFor(() => /shared/.test($('#view .alert')?.textContent || ''), 6000, 'shared view');
+    await waitFor(() => $('#sheet .lead-sheet'), 6000, 'preview');
+    await click('[data-act="save"]');
+    await click(() => [...D().querySelectorAll('.modal.show .modal-footer .btn')].find((b) => /Keep both/.test(b.textContent)));
+    await waitFor(() => stored().songs.length === before + 1, 4000, 'copy saved');
+    await waitFor(() => /#\/song\//.test(W().location.hash), 4000, 'opened editor');
+  });
+
+  await step('MusicXML import (exported by the app) adds a song', async () => {
+    const { toMusicXML } = await appModule('js/export/musicxml.js');
+    const { getTuning } = await appModule('js/music/tunings.js');
+    const song = stored().songs.find((x) => x.id === songId);
+    const xml = toMusicXML(song, getTuning('guitar-standard'));
+    const importer = await appModule('js/ui/importer.js');
+    const before = stored().songs.length;
+    await importer.importFiles([new (W().File)([xml], 'score.musicxml', { type: 'application/xml' })]);
+    await sleep(300);
+    assert(stored().songs.length === before + 1, 'not imported');
+  });
+
+  let setlistId;
+  await step('setlists: add selected songs, reorder, print songbook', async () => {
+    await go('#/songs');
+    await waitFor(() => $$('[data-select]').length >= 2, 4000, 'song checkboxes');
+    $$('[data-select]').slice(0, 2).forEach((c) => c.click());
+    await click('[data-act="setlist-selected"]');
+    const nameInput = await waitFor(() => D().querySelector('.modal.show #sl-new'), 4000, 'setlist dialog');
+    nameInput.value = 'E2E gig';
+    await click(() => [...D().querySelectorAll('.modal.show .modal-footer .btn-primary')][0]);
+    await waitFor(() => (stored().setlists || []).some((l) => l.name === 'E2E gig' && l.songIds.length === 2), 4000, 'setlist saved');
+    setlistId = stored().setlists.find((l) => l.name === 'E2E gig').id;
+    await click('[data-tab="setlists"]');
+    await waitFor(() => $$('#setlists a').some((a) => /E2E gig/.test(a.textContent)), 3000, 'setlist listed');
+    await go(`#/setlist/${setlistId}`);
+    const order = stored().setlists.find((l) => l.id === setlistId).songIds.join();
+    await click('[data-move="1"][data-i="0"]');
+    await sleep(200);
+    assert(stored().setlists.find((l) => l.id === setlistId).songIds.join() !== order, 'not reordered');
+    await go(`#/print/setlist/${setlistId}?noprint=1`);
+    await waitFor(() => $$('.songbook-song .lead-sheet').length === 2, 8000, 'songbook pages');
+    assert($$('.songbook-toc li').length === 2, 'contents');
+  });
+
+  await step('practice session is logged and the dashboard charts it', async () => {
+    await go(`#/practice/${songId}`);
+    await waitFor(() => $('#play'), 4000, 'play');
+    if ($('#o-countin').checked) $('#o-countin').click();
+    const before = (stored().practiceLog || []).filter((e) => e.kind === 'practice' && e.ref === songId).length;
+    await click('#play');
+    await waitFor(() => /Stop/.test($('#play').textContent), 6000, 'playing');
+    await sleep(6000);
+    await click('#play');
+    await waitFor(() => (stored().practiceLog || []).filter((e) => e.kind === 'practice' && e.ref === songId).length === before + 1, 4000, 'session logged');
+    const entry = stored().practiceLog.filter((e) => e.kind === 'practice' && e.ref === songId).pop();
+    assert(entry.seconds >= 5 && entry.tempoEnd > 0, JSON.stringify(entry));
+    await go('#/practice');
+    await waitFor(() => $$('#chart-daily .chart-hit').length === 14, 5000, 'daily chart');
+    const today = $$('#chart-daily .chart-hit').pop();
+    today.dispatchEvent(new Event('focus'));
+    await waitFor(() => !$('#chart-daily .chart-tip').hidden && /min/.test($('#chart-daily .chart-tip').textContent), 2000, 'tooltip on focus');
+    await waitFor(() => $('#chart-tempo svg, #chart-tempo p'), 3000, 'tempo chart');
+  });
+
+  await step('stage mode: big chord, pedal keys step, Escape exits', async () => {
+    await go(`#/stage/${songId}`);
+    await waitFor(() => D().body.classList.contains('stage-active') && $('#st-chord').textContent.trim(), 5000, 'stage');
+    const pos0 = $('#st-pos').textContent;
+    D().dispatchEvent(new (W().KeyboardEvent)('keydown', { key: 'PageDown', bubbles: true }));
+    await sleep(150);
+    assert($('#st-pos').textContent !== pos0 || $('#st-chord').textContent, 'did not step');
+    D().dispatchEvent(new (W().KeyboardEvent)('keydown', { key: 'PageUp', bubbles: true }));
+    await sleep(150);
+    assert($('#st-pos').textContent === pos0, 'PageUp did not go back');
+    D().dispatchEvent(new (W().KeyboardEvent)('keydown', { key: 'Escape', bubbles: true }));
+    await waitFor(() => /#\/practice\//.test(W().location.hash) && !D().body.classList.contains('stage-active'), 4000, 'exited');
+    await go(`#/stage/setlist/${setlistId}`);
+    await waitFor(() => /^1\/2/.test($('#st-title').textContent), 4000, 'setlist stage title');
+    await click('[data-act="next-song"]');
+    await waitFor(() => /^2\/2/.test($('#st-title').textContent), 3000, 'next song');
+  });
+
+  await step('train: tuner detects a 110 Hz tone as A2', async () => {
+    await go('#/train');
+    const pane = await waitFor(() => $('#train-pane').tunerForTest && $('#train-pane'), 4000, 'tuner');
+    pane.tunerForTest(110);
+    await waitFor(() => /^A2/.test($('#tn-note').textContent) && /in tune|cents/.test($('#tn-text').textContent), 5000, 'A2 detected');
+    assert($('.tuner-string.active') && /A/.test($('.tuner-string.active').textContent), 'nearest string not highlighted');
+  });
+
+  await step('train: chord-change drill counts and logs a run', async () => {
+    await click('[data-tab="drills"]');
+    const pane = await waitFor(() => $('#train-pane').drillForTest && $('#train-pane'), 4000, 'drills');
+    const before = (stored().practiceLog || []).filter((e) => e.kind === 'drill').length;
+    pane.drillForTest.setDuration(3);
+    pane.drillForTest.start();
+    await waitFor(() => /Changed/.test($('#dr-main').textContent), 5000, 'running');
+    for (let i = 0; i < 4; i++) { $('#dr-main').click(); await sleep(60); }
+    assert($('#dr-count').textContent === '4', `count ${$('#dr-count').textContent}`);
+    await waitFor(() => /Time!/.test($('#dr-timer').textContent), 6000, 'finished');
+    await waitFor(() => (stored().practiceLog || []).filter((e) => e.kind === 'drill').length === before + 1, 3000, 'drill logged');
+    assert(stored().practiceLog.filter((e) => e.kind === 'drill').pop().score === 4, 'score');
+    await waitFor(() => /best changes/.test($('#dr-stats').textContent), 3000, 'stats tile');
+  });
+
+  await step('train: ear-training answer and flashcard rating are recorded', async () => {
+    await click('[data-tab="ear"]');
+    await waitFor(() => $$('[data-answer]').length >= 2, 4000, 'quiz options');
+    $$('[data-answer]')[0].click();
+    await waitFor(() => /Correct|Not quite/.test($('#ear-feedback').textContent), 3000, 'feedback');
+    const beforeQuiz = (stored().practiceLog || []).filter((e) => e.kind === 'quiz').length;
+    await click('[data-tab="cards"]');
+    await waitFor(() => (stored().practiceLog || []).filter((e) => e.kind === 'quiz').length === beforeQuiz + 1, 3000, 'quiz logged on leaving');
+    await click('[data-act="reveal"]');
+    await click('[data-rate="good"]');
+    await waitFor(() => Object.values(stored().flashcards || {}).some((c) => c.box === 2), 3000, 'flashcard saved');
+  });
+
   await step('backup export → wipe → import restores songs', async () => {
     const { buildBackup } = await import('../js/export/backup.js');
     const state = stored();
@@ -159,6 +373,34 @@ Run headless: <code>chromium --headless --autoplay-policy=no-user-gesture-requir
     await p;
     await sleep(300);
     assert(stored().songs.length === count, `restored ${stored().songs.length}/${count}`);
+  });
+
+  await step('v2 data: setlists, practice log & flashcards persist and survive backup restore', async () => {
+    const store = await appModule('js/state/store.js');
+    const { buildBackup } = await appModule('js/export/backup.js');
+    const songs = store.getState().songs;
+    assert(songs.length >= 2, 'need two songs');
+    const list = store.saveSetlist({ name: 'Gig', songIds: [songs[0].id, songs[1].id] });
+    store.logPractice({ kind: 'practice', ref: songs[0].id, seconds: 120, tempoStart: 80, tempoEnd: 92 });
+    store.updateFlashcard('guitar-standard|C', { box: 2, due: new Date().toISOString() });
+    store.flush();
+    const saved = stored();
+    assert(saved.schemaVersion === 2, `schemaVersion ${saved.schemaVersion}`);
+    assert(saved.setlists.some((l) => l.id === list.id) && saved.practiceLog.length >= 1 && saved.flashcards['guitar-standard|C'].box === 2, 'not persisted');
+    const backup = JSON.stringify(buildBackup(store.getState()));
+    store.replaceAll({ songs: [], setlists: [], practiceLog: [], flashcards: {} });
+    const importer = await appModule('js/ui/importer.js');
+    const p = importer.importFiles([new (W().File)([backup], 'backup.json', { type: 'application/json' })]);
+    const btn = await waitFor(() => [...D().querySelectorAll('.modal.show .modal-footer .btn-primary')].find((b) => /Import/.test(b.textContent)), 5000, 'import dialog');
+    btn.click();
+    await p;
+    const st = store.getState();
+    assert(st.setlists.find((l) => l.id === list.id)?.songIds.length === 2, 'setlist not restored');
+    assert(st.practiceLog.some((e) => e.tempoEnd === 92), 'log not restored');
+    assert(st.flashcards['guitar-standard|C']?.box === 2, 'flashcards not restored');
+    store.deleteSong(songs[1].id);
+    assert(store.getSetlist(list.id).songIds.length === 1, 'deleted song still in setlist');
+    store.saveSong(songs[1], { touch: false });
   });
 
   await step('ChordPro import creates a song', async () => {

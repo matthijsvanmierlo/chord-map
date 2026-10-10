@@ -26,9 +26,28 @@ export const STRUM_PATTERNS = [
   { id: 'rumba', name: 'Rumba / flamenco', meter: [4, 4], perBeat: 2, slots: 'D . d U . U D U' },
 ];
 
-export function getPattern(id) {
-  return STRUM_PATTERNS.find((p) => p.id === id) || STRUM_PATTERNS[1];
+let customPatterns = [];
+
+/** Install user-made patterns (from settings). */
+export function setCustomPatterns(list) {
+  customPatterns = Array.isArray(list) ? list.filter((p) => p && p.id && p.slots) : [];
 }
+
+/** Built-in + custom patterns. */
+export function allPatterns() {
+  return [...STRUM_PATTERNS, ...customPatterns];
+}
+
+export function getPattern(id) {
+  return allPatterns().find((p) => p.id === id) || STRUM_PATTERNS[1];
+}
+
+/** Tokens a pattern step can hold, in the order the editor cycles through them. */
+export const PATTERN_TOKENS = ['.', 'D', 'U', 'd', 'B', 'b', '1', '2', '3', '4'];
+export const TOKEN_NAMES = {
+  '.': 'rest', D: 'down strum', U: 'up strum', d: 'muted chop', B: 'bass note', b: 'alternate bass',
+  1: 'highest string', 2: '2nd string', 3: '3rd string', 4: '4th string',
+};
 
 /**
  * Expand a pattern into step events for one bar of a given meter.

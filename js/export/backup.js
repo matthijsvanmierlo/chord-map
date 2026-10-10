@@ -1,5 +1,5 @@
 // Full-data backup (JSON) export / import with validation, preview and merge.
-import { APP_ID, SCHEMA_VERSION, sanitizeState, sanitizeSong, migrate, newId } from '../state/schema.js';
+import { APP_ID, SCHEMA_VERSION, sanitizeState, sanitizeSong, migrate, newId, capPracticeLog } from '../state/schema.js';
 
 /** Build the backup object for the current state. */
 export function buildBackup(state) {
@@ -11,6 +11,10 @@ export function buildBackup(state) {
     settings: state.settings,
     meta: { tourDone: state.meta?.tourDone ?? false },
     songs: state.songs,
+    setlists: state.setlists ?? [],
+    practiceLog: state.practiceLog ?? [],
+    practiceTotals: state.practiceTotals,
+    flashcards: state.flashcards ?? {},
   };
 }
 
@@ -21,7 +25,7 @@ export function buildSongFile(song) {
 /**
  * Parse an imported JSON text. Accepts a full backup, a single-song file, a
  * bare song object or an array of songs. Never touches stored data.
- * @returns {{kind:'backup'|'songs', songs:object[], settings:object|null, warnings:string[]}}
+ * @returns {{kind:'backup'|'songs', songs:object[], settings:object|null, setlists:object[], practiceLog:object[], practiceTotals:object|null, flashcards:object, warnings:string[]}}
  */
 export function parseImport(text) {
   let data;
@@ -32,7 +36,15 @@ export function parseImport(text) {
 
   if (data.kind === 'backup' || (Array.isArray(data.songs) && data.settings)) {
     const r = sanitizeState(data);
-    return { kind: 'backup', songs: r.songs, settings: r.settings, warnings: r.warnings };
+    return {
+      kind: 'backup', songs: r.songs, settings: r.settings, setlists: r.setlists,
+      practiceLog: r.practiceLog, practiceTotals: r.practiceTotals, flashcards: r.flashcards, warnings: r.warnings,
+    };
+  }
+  if (data.kind === 'setlist') {
+    const r = sanitizeState({ songs: data.songs, setlists: [data.setlist] });
+    if (!r.songs.length && !r.setlists.length) throw new Error('This setlist file is empty.');
+    return { kind: 'songs', songs: r.songs, settings: null, setlists: r.setlists, practiceLog: [], practiceTotals: null, flashcards: {}, warnings: r.warnings };
   }
   const raw = data.kind === 'song' ? [data.song] : Array.isArray(data) ? data : Array.isArray(data.songs) ? data.songs : [data];
   const songs = [];
@@ -47,7 +59,7 @@ export function parseImport(text) {
     }
   }
   if (!songs.length) throw new Error('No songs or progressions found in this file.');
-  return { kind: 'songs', songs, settings: null, warnings };
+  return { kind: 'songs', songs, settings: null, setlists: [], practiceLog: [], practiceTotals: null, flashcards: {}, warnings };
 }
 
 /** Compare incoming songs with existing ones → summary for the preview dialog. */
@@ -86,6 +98,29 @@ export function mergeSongs(existing, incoming, strategy = 'newest') {
       out[i] = s;
     }
   }
+  return out;
+}
+
+/** Merge setlists by id; the most recently updated copy wins. */
+export function mergeSetlists(existing, incoming) {
+  const map = new Map(existing.map((l) => [l.id, l]));
+  for (const l of incoming) {
+    const cur = map.get(l.id);
+    if (!cur || Date.parse(l.updatedAt) > Date.parse(cur.updatedAt)) map.set(l.id, l);
+  }
+  return [...map.values()];
+}
+
+/** Union practice logs by entry id, then re-cap (keeps the existing archived totals). */
+export function mergePracticeLog(existing, incoming, totals) {
+  const ids = new Set(existing.map((e) => e.id));
+  return capPracticeLog([...existing, ...incoming.filter((e) => !ids.has(e.id))], totals);
+}
+
+/** Merge flashcard progress: keep whichever card is further along (higher box). */
+export function mergeFlashcards(existing, incoming) {
+  const out = { ...existing };
+  for (const [k, v] of Object.entries(incoming)) if (!out[k] || v.box > out[k].box) out[k] = v;
   return out;
 }
 

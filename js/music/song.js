@@ -3,6 +3,7 @@ import { parseBarText, romanToChord } from './roman.js';
 import { transposeChordBetweenKeys, parseChord } from './chordParser.js';
 import { newSong, newSection, newBar } from '../state/schema.js';
 import { simplify } from './theory.js';
+import { defaultGrooveFor } from '../data/grooves.js';
 
 /** Sections in play order (form, or natural order when form is empty). */
 export function playOrder(song) {
@@ -78,6 +79,7 @@ export function presetToSong(preset, { tonic, instrumentId } = {}) {
     swing: !!preset.swing,
     instrumentId: instrumentId || 'guitar-standard',
     strumPatternId: preset.strumPatternId || 'quarters',
+    groove: defaultGrooveFor(preset.style, preset.strumPatternId, preset.timeSignature),
     sections,
     sourcePresetId: preset.id,
   });

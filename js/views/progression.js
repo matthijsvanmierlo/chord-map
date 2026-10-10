@@ -20,7 +20,7 @@ export function displayControlsHTML(settings) {
     </div>
     <fieldset class="d-flex flex-wrap gap-3 small">
       <legend class="visually-hidden">Show</legend>
-      ${[['diagrams', 'Diagrams'], ['staff', 'Staff'], ['tab', 'TAB']].map(([k, l]) => `
+      ${[['diagrams', 'Diagrams'], ['staff', 'Staff'], ['tab', 'TAB'], ['lyrics', 'Lyrics']].map(([k, l]) => `
         <div class="form-check form-switch mb-0">
           <input class="form-check-input" type="checkbox" role="switch" id="show-${k}" data-show="${k}" ${n[k] ? 'checked' : ''}>
           <label class="form-check-label" for="show-${k}">${l}</label>

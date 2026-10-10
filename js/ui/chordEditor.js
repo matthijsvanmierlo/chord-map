@@ -1,5 +1,6 @@
 // Chord editing panel (Bootstrap offcanvas): type or tap a chord, set beats,
 // pick a voicing, hear it.
+import { songPrefs } from '../music/voicingPrefs.js';
 import { parseChord, prettyChord, describeChord, SUFFIX_GROUPS } from '../music/chordParser.js';
 import { getVoicings } from '../music/voicingEngine.js';
 import { chordDiagramSVG } from '../render/chordDiagram.js';
@@ -8,13 +9,15 @@ import { chordToRoman, prettyRoman } from '../music/roman.js';
 import { prettyAcc, keyPrefersFlats, FLAT_NAMES, SHARP_NAMES } from '../music/theory.js';
 import { escapeHtml, icon, on, announce } from './dom.js';
 import { player } from '../audio/player.js';
+import { mountFretboardPanel } from './fretboardPanel.js';
 
 const SUFFIX_LABEL = { '': 'maj', '69': '6/9' };
 
 /**
  * Open the chord editor.
  * @param {{chord:{symbol:string,beats:number,voicingId:string|null}, song:object, tuning:object, settings:object, title?:string,
- *   onChange:(chord)=>void, onRemove?:()=>void, onClose?:()=>void}} opts
+ *   onChange:(chord)=>void, onRemove?:()=>void, onClose?:()=>void,
+ *   ideas?:()=>{id:string,label:string,explanation:string,chords:[string,number][]}[], onApplyIdea?:(idea)=>void}} opts
  */
 export function openChordEditor(opts) {
   const { song, tuning, settings } = opts;
@@ -77,6 +80,14 @@ export function openChordEditor(opts) {
       <h3 class="h6">Colour chords <span class="text-body-secondary small fw-normal">(secondary dominants, borrowed)</span></h3>
       <div class="d-flex flex-wrap gap-1 mb-3" id="ce-colour"></div>
 
+      ${opts.ideas ? `<details class="mb-3" id="ce-ideas-d">
+        <summary class="fw-semibold">${icon('lightbulb')} Reharmonisation ideas</summary>
+        <div id="ce-ideas" class="mt-2" aria-live="polite"></div>
+      </details>` : ''}
+      <details class="mb-3" id="ce-fb-d">
+        <summary class="fw-semibold">${icon('distribute-horizontal')} Fretboard &amp; scales</summary>
+        <div id="ce-fb" class="mt-2"></div>
+      </details>
       <details class="mb-3">
         <summary class="fw-semibold">Build any chord (root + quality)</summary>
         <div class="mt-2" role="group" aria-label="Root">
@@ -115,8 +126,30 @@ export function openChordEditor(opts) {
       + '<button type="button" class="btn btn-sm btn-outline-secondary palette-btn" data-pick="N.C.">N.C.<small>rest</small></button>';
   }
 
+  let fbPanel = null;
+  const fbProps = () => ({ symbol: chord.symbol, key: song.key, style: song.style, tuning, capo: song.capo, leftHanded: settings.leftHanded,
+    voicing: getVoicings(chord.symbol, tuning, { capo: song.capo, prefs: songPrefs(song) })[voicingIndex] || null });
+
+  function drawIdeas() {
+    const host = el.querySelector('#ce-ideas');
+    if (!host) return;
+    const list = parseChord(chord.symbol) ? opts.ideas() : [];
+    host.innerHTML = list.length ? `<ul class="list-unstyled mb-0">${list.map((idea, i) => `
+      <li class="border-bottom py-2">
+        <div class="d-flex flex-wrap align-items-center gap-2">
+          <strong class="me-auto">${escapeHtml(idea.label)}</strong>
+          <button type="button" class="btn btn-sm btn-outline-secondary" data-idea-hear="${i}" aria-label="Hear ${escapeHtml(idea.label)}">${icon('volume-up')}</button>
+          <button type="button" class="btn btn-sm btn-outline-primary" data-idea-apply="${i}">Apply</button>
+        </div>
+        <div class="small text-body-secondary">${escapeHtml(idea.explanation)}</div>
+      </li>`).join('')}</ul>` : '<p class="small text-body-secondary mb-0">No ideas for this chord here — try one that leads somewhere (e.g. a V7 before its I).</p>';
+    host._ideas = list;
+  }
+
   function drawPreview() {
     const c = parseChord(chord.symbol);
+    drawIdeas();
+    if (fbPanel) fbPanel.update(fbProps());
     const fb = el.querySelector('#ce-feedback');
     const diag = el.querySelector('#ce-diagram');
     const lock = el.querySelector('#ce-lock');
@@ -134,7 +167,7 @@ export function openChordEditor(opts) {
       return;
     }
     fb.innerHTML = `<strong>${escapeHtml(describeChord(chord.symbol))}</strong> · ${escapeHtml(prettyRoman(chordToRoman(chord.symbol, song.key.tonic)))} in ${escapeHtml(prettyAcc(song.key.tonic))} · notes ${c.tones.map((t) => `<span class="${t.optional ? 'text-body-secondary' : ''}">${escapeHtml(prettyAcc(t.name))}</span>`).join(' ')}`;
-    const list = getVoicings(chord.symbol, tuning, { capo: song.capo });
+    const list = getVoicings(chord.symbol, tuning, { capo: song.capo, prefs: songPrefs(song) });
     if (chord.voicingId) {
       const i = list.findIndex((v) => v.id === chord.voicingId);
       if (i >= 0) voicingIndex = i;
@@ -173,7 +206,7 @@ export function openChordEditor(opts) {
   }));
   offs.push(on(el, 'click', '[data-pick]', (e, t) => {
     setSymbol(t.dataset.pick);
-    player.previewChord(chord.symbol, tuning, { capo: song.capo });
+    player.previewChord(chord.symbol, tuning, { capo: song.capo, prefs: songPrefs(song) });
     announce(`${describeChord(chord.symbol)} selected`);
   }));
   offs.push(on(el, 'click', '[data-root]', (e, t) => {
@@ -192,26 +225,40 @@ export function openChordEditor(opts) {
     setSymbol(c.root + c.suffix + (b && b !== c.root ? '/' + b : ''));
   }));
   offs.push(on(el, 'click', '[data-voicing]', (e, t) => {
-    const list = getVoicings(chord.symbol, tuning, { capo: song.capo });
+    const list = getVoicings(chord.symbol, tuning, { capo: song.capo, prefs: songPrefs(song) });
     if (!list.length) return;
     voicingIndex = (voicingIndex + Number(t.dataset.voicing) + list.length) % list.length;
     chord.voicingId = list[voicingIndex].id; // browsing a shape locks it
     drawPreview();
     emit();
-    player.previewChord(chord.symbol, tuning, { capo: song.capo, voicingId: chord.voicingId });
+    player.previewChord(chord.symbol, tuning, { capo: song.capo, voicingId: chord.voicingId, prefs: songPrefs(song) });
   }));
   offs.push(on(el, 'change', '#ce-lock', (e) => {
-    const list = getVoicings(chord.symbol, tuning, { capo: song.capo });
+    const list = getVoicings(chord.symbol, tuning, { capo: song.capo, prefs: songPrefs(song) });
     chord.voicingId = e.target.checked && list[voicingIndex] ? list[voicingIndex].id : null;
     emit();
   }));
   offs.push(on(el, 'change', '#ce-sevenths', drawPalette));
   offs.push(on(el, 'click', '[data-act]', (e, t) => {
-    if (t.dataset.act === 'hear') player.previewChord(chord.symbol, tuning, { capo: song.capo, voicingId: chord.voicingId });
+    if (t.dataset.act === 'hear') player.previewChord(chord.symbol, tuning, { capo: song.capo, voicingId: chord.voicingId, prefs: songPrefs(song) });
     if (t.dataset.act === 'remove') { opts.onRemove(); oc.hide(); }
   }));
   el.addEventListener('shown.bs.offcanvas', () => { input.focus(); input.select(); });
+  offs.push(on(el, 'click', '[data-idea-hear]', (e, t) => {
+    const idea = el.querySelector('#ce-ideas')._ideas[Number(t.dataset.ideaHear)];
+    idea.chords.forEach(([sym], k) => setTimeout(() => player.previewChord(sym, tuning, { capo: song.capo, prefs: songPrefs(song) }), k * 750));
+  }));
+  offs.push(on(el, 'click', '[data-idea-apply]', (e, t) => {
+    const idea = el.querySelector('#ce-ideas')._ideas[Number(t.dataset.ideaApply)];
+    opts.onApplyIdea(idea);
+    announce(`Applied: ${idea.label}`);
+    oc.hide();
+  }));
+  el.querySelector('#ce-fb-d').addEventListener('toggle', (e) => {
+    if (e.target.open && !fbPanel) fbPanel = mountFretboardPanel(el.querySelector('#ce-fb'), fbProps());
+  });
   el.addEventListener('hidden.bs.offcanvas', () => {
+    fbPanel?.destroy();
     offs.forEach((o) => o());
     el.remove();
     opts.onClose?.();

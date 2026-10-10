@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Seed demo data</title></head>
 <body>
-<p>Dev fixture: seeds a demo song into localStorage, then opens <code>?go=</code> route (default: My Songs).
+<p>Dev fixture: seeds demo songs (with lyrics) and a setlist into localStorage, then opens <code>?go=</code> route (default: My Songs).
 Usage: <code>/tests/seed.html?go=song/demo-song</code></p>
 <script type="module">
   import { PRESETS } from '../js/data/presets/index.js';
@@ -13,8 +13,23 @@ Usage: <code>/tests/seed.html?go=song/demo-song</code></p>
   song.title = 'Demo: ii–V–I + blues';
   song.sections.push({ ...presetToSong(PRESETS.find((x) => x.style === 'blues')).sections[0], name: 'Blues', repeat: 2 });
   song.form = [song.sections[0].id, song.sections[1].id, song.sections[0].id];
-  const state = sanitizeState({ songs: [song], settings: { tourDone: true } });
+  song.sections[0].bars[0].lyric = 'Fly me to the moon';
+  song.sections[0].bars[1].lyric = 'and let me play';
+  const second = presetToSong(PRESETS.find((x) => x.id.startsWith('pop')));
+  second.id = 'demo-song-2';
+  const state = sanitizeState({ songs: [song, second], settings: { tourDone: true }, setlists: [{ id: 'demo-setlist', name: 'Demo gig', songIds: [song.id, second.id] }],
+    practiceLog: demoLog(song.id, second.id) });
   localStorage.setItem('fretboard-progressions:v1', JSON.stringify({ app: 'fretboard-progressions', schemaVersion: 1, ...state }));
+  function demoLog(a, b) {
+    const out = [];
+    const day = (n, h = 18) => { const d = new Date(); d.setDate(d.getDate() - n); d.setHours(h, 0, 0, 0); return d.toISOString(); };
+    [[13, 900], [12, 600], [10, 1200], [9, 300], [8, 1500], [6, 600], [5, 900], [4, 1800], [3, 600], [2, 1200], [1, 900], [0, 600]].forEach(([n, sec], i) => {
+      out.push({ id: `p${i}`, kind: 'practice', ref: i % 3 ? a : b, date: day(n), seconds: sec, tempoStart: 70 + i * 3, tempoEnd: 74 + i * 4 });
+    });
+    [[9, 22], [6, 27], [3, 31], [1, 34]].forEach(([n, sc], i) => out.push({ id: `d${i}`, kind: 'drill', ref: 'C|G', date: day(n, 19), seconds: 60, score: sc }));
+    out.push({ id: 'q1', kind: 'quiz', ref: 'quality', date: day(2, 20), seconds: 300, score: 17, total: 20 });
+    return out;
+  }
   const go = new URLSearchParams(location.search).get('go') || 'songs';
   location.replace('../#/' + go);
 </script>

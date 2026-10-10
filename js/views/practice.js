@@ -1,6 +1,11 @@
 // Practice mode: big current/next chord, synced notation highlight, tempo
 // control, count-in, loop by section, metronome-only and a speed trainer.
-import { getSong, getState, getSettings, updateSettings, updateMeta, createSong, subscribe } from '../state/store.js';
+import { songPrefs } from '../music/voicingPrefs.js';
+import { getSong, getState, getSettings, updateSettings, updateMeta, createSong, subscribe, saveSong } from '../state/store.js';
+import { GROOVES, getGroove } from '../data/grooves.js';
+import { createTapTempo } from '../ui/tapTempo.js';
+import { mountFretboardPanel } from '../ui/fretboardPanel.js';
+import { trackPracticeSessions } from '../audio/sessionLog.js';
 import { navigate } from '../router.js';
 import { getPreset } from '../data/presets/index.js';
 import { presetToSong, timeline, playOrder } from '../music/song.js';
@@ -14,19 +19,94 @@ import { player } from '../audio/player.js';
 import { getPattern, patternLabel } from '../data/strumPatterns.js';
 import { escapeHtml, icon, on, announce, formatDate, debounce } from '../ui/dom.js';
 import { toast } from '../ui/feedback.js';
-import { emptyState, notFound, startActionsHTML } from './shared.js';
+import { emptyState, notFound, startActionsHTML, mixerHTML, subdivisionOptions } from './shared.js';
 import { keyLabel } from '../music/theory.js';
+import { practiceSummary, timeByRef, tempoHistory, drillStats, quizAccuracy, formatDuration } from '../train/stats.js';
+import { columnChart, lineChart, sparklineSVG } from '../render/charts.js';
+import { prettyChord as prettyChordName } from '../music/chordParser.js';
 
 function pickerHTML() {
-  const songs = [...getState().songs].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const st = getState();
+  const songs = [...st.songs].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const sum = practiceSummary(st.practiceLog, st.practiceTotals);
+  const top = timeByRef(st.practiceLog, st.practiceTotals).slice(0, 5);
+  const refName = (ref) => (ref.startsWith('preset:') ? getPreset(ref.slice(7))?.name : getSong(ref)?.title) || 'Deleted song';
+  const drills = [...new Set(st.practiceLog.filter((e) => e.kind === 'drill').map((e) => e.ref))]
+    .map((ref) => ({ ref, ...drillStats(st.practiceLog, ref) })).sort((a, b) => b.best - a.best).slice(0, 5);
+  const quiz = quizAccuracy(st.practiceLog);
+  const tempoSongs = [...new Set(st.practiceLog.filter((e) => e.kind === 'practice' && e.tempoEnd).map((e) => e.ref))];
+  const hasData = sum.sessions > 0;
   return `<h1 class="page-title mb-1">Practice</h1>
-    <p class="lead-soft">Choose something to practise. Tip: you can also practise any progression straight from Explore.</p>
+    <p class="lead-soft">Your progress, then pick something to practise. You can also practise any progression straight from Explore.</p>
+    ${hasData ? `
+    <section aria-labelledby="prog-h" class="mb-4">
+      <h2 class="visually-hidden" id="prog-h">Your progress</h2>
+      <div class="stat-tiles mb-3">
+        <div class="stat-tile"><div class="stat-label">This week</div><div class="stat-value">${escapeHtml(formatDuration(sum.weekSeconds))}</div></div>
+        <div class="stat-tile"><div class="stat-label">Day streak</div><div class="stat-value">${sum.streak}</div></div>
+        <div class="stat-tile"><div class="stat-label">Total practice</div><div class="stat-value">${escapeHtml(formatDuration(sum.totalSeconds))}</div></div>
+        <div class="stat-tile"><div class="stat-label">Sessions</div><div class="stat-value">${sum.sessions.toLocaleString()}</div></div>
+      </div>
+      <div class="row g-3">
+        <div class="col-lg-7"><div class="surface p-3 h-100">
+          <h3 class="h6 mb-1">Minutes practised per day</h3>
+          <p class="small text-body-secondary mb-2">Last 14 days · songs, drills, ear training and flashcards</p>
+          <div id="chart-daily"></div>
+        </div></div>
+        <div class="col-lg-5"><div class="surface p-3 h-100">
+          <h3 class="h6">Most practised</h3>
+          ${top.length ? `<ol class="mb-3 small">${top.map((t) => `<li>${t.ref.startsWith('preset:') ? escapeHtml(refName(t.ref)) : `<a href="#/practice/${escapeHtml(t.ref)}">${escapeHtml(refName(t.ref))}</a>`} <span class="text-body-secondary">— ${escapeHtml(formatDuration(t.seconds))}</span></li>`).join('')}</ol>` : '<p class="small text-body-secondary">Play a song in Practice to start tracking.</p>'}
+          ${drills.length ? `<h3 class="h6">Chord-change bests <span class="small text-body-secondary fw-normal">(per minute)</span></h3>
+            <ul class="list-unstyled small mb-3">${drills.map((d) => `<li class="d-flex justify-content-between align-items-center gap-2"><span>${escapeHtml(d.ref.split('|').map(prettyChordName).join(' ⇄ '))}</span><span class="d-flex align-items-center gap-2">${sparklineSVG(d.history.slice(-12), { width: 70, height: 20, label: `Trend: ${d.history.slice(-12).join(', ')}` })}<strong>${d.best}</strong></span></li>`).join('')}</ul>` : ''}
+          ${Object.keys(quiz).length ? `<h3 class="h6">Ear training</h3><ul class="list-unstyled small mb-0">${Object.entries(quiz).map(([m, r]) => `<li>${escapeHtml({ quality: 'Chord quality', progression: 'Progressions', cadence: 'Cadences' }[m] || m)}: <strong>${r.pct}%</strong> <span class="text-body-secondary">(${r.correct}/${r.total})</span></li>`).join('')}</ul>` : ''}
+        </div></div>
+        ${tempoSongs.length ? `<div class="col-12"><div class="surface p-3">
+          <div class="d-flex flex-wrap gap-2 align-items-end mb-2">
+            <h3 class="h6 mb-0 me-auto">Tempo reached per session</h3>
+            <label class="visually-hidden" for="tempo-song">Song</label>
+            <select id="tempo-song" class="form-select form-select-sm" style="width:auto">${tempoSongs.map((r) => `<option value="${escapeHtml(r)}">${escapeHtml(refName(r))}</option>`).join('')}</select>
+          </div>
+          <div id="chart-tempo"></div>
+        </div></div>` : ''}
+      </div>
+    </section>` : ''}
+    ${hasData ? '<h2 class="h4 mb-2">Pick a song</h2>' : ''}
     ${songs.length ? `<div class="list-group mb-4">${songs.map((s) => `
       <a class="list-group-item list-group-item-action d-flex justify-content-between align-items-center" href="#/practice/${s.id}">
         <span><strong>${escapeHtml(s.title)}</strong> <span class="small text-body-secondary">· ${escapeHtml(keyLabel(s.key))} · ${s.tempo} bpm</span></span>
         <span class="small text-body-secondary">${formatDate(s.updatedAt)}</span>
       </a>`).join('')}</div>`
     : emptyState('music-note-list', 'No songs yet', 'Save a progression from Explore or build your own first.', startActionsHTML())}`;
+}
+
+/** Render the dashboard + picker and mount its charts. */
+function renderPicker(el) {
+  el.innerHTML = pickerHTML();
+  const st = getState();
+  const daily = el.querySelector('#chart-daily');
+  if (daily) {
+    const sum = practiceSummary(st.practiceLog, st.practiceTotals);
+    columnChart(daily, {
+      title: 'Minutes practised per day, last 14 days',
+      valueLabel: 'Minutes',
+      data: sum.daily.map((d) => ({
+        label: d.date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }),
+        short: d.date.toLocaleDateString(undefined, { day: 'numeric' }),
+        value: Math.round(d.seconds / 60),
+        display: `${Math.round(d.seconds / 60)} min`,
+      })),
+    });
+  }
+  const sel = el.querySelector('#tempo-song');
+  const drawTempo = () => {
+    const hist = tempoHistory(st.practiceLog, sel.value).slice(-20);
+    lineChart(el.querySelector('#chart-tempo'), {
+      title: 'Tempo reached per practice session',
+      valueLabel: 'Tempo (bpm)',
+      data: hist.map((h) => ({ label: new Date(h.date).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }), value: h.tempo, display: `${h.tempo} bpm` })),
+    });
+  };
+  if (sel) { sel.addEventListener('change', drawTempo); drawTempo(); }
 }
 
 export default {
@@ -51,12 +131,12 @@ export default {
         return null;
       }
       // song picker: stays live if songs change (e.g. imported in another tab)
-      el.innerHTML = pickerHTML();
+      renderPicker(el);
       const offNew = on(el, 'click', '[data-act="new"]', () => {
         const s = createSong({ title: 'My progression', instrumentId: getSettings().instrumentId });
         navigate(`song/${s.id}`);
       });
-      const offSub = subscribe((_s, reason) => { if (['songs', 'replaced', 'external'].includes(reason)) el.innerHTML = pickerHTML(); });
+      const offSub = subscribe((_s, reason) => { if (['songs', 'replaced', 'external', 'practice'].includes(reason)) renderPicker(el); });
       return () => { offNew(); offSub(); };
     }
 
@@ -67,7 +147,8 @@ export default {
     let currentIndex = -1;
     let stepIndex = 0;
     let barRects = [];
-    const opts = { loop: true, countIn: settings.countIn, metronome: settings.metronome, chords: true, section: '', trainer: false, step: 5, every: 2, max: Math.min(400, song.tempo + 40) };
+    const opts = { loop: true, countIn: settings.countIn, metronome: settings.metronome, subdivision: settings.metronomeSubdivision, chords: true, groove: getGroove(song.groove).id, section: '', trainer: false, step: 5, every: 2, max: Math.min(400, song.tempo + 40) };
+    const tapper = createTapTempo();
     const sections = playOrder(song).filter((s, i, a) => a.findIndex((x) => x.id === s.id) === i);
 
     el.innerHTML = `
@@ -77,7 +158,10 @@ export default {
           <h1 class="page-title mb-1">${escapeHtml(song.title)}</h1>
           <p class="small text-body-secondary mb-0">${escapeHtml(keyLabel(song.key))} · ${song.timeSignature.join('/')} · ${escapeHtml(tuning.name)}${song.capo ? ` · Capo ${song.capo}` : ''} · Strum: <span class="font-monospace">${escapeHtml(patternLabel(getPattern(song.strumPatternId)))}</span></p>
         </div>
-        <a class="btn btn-outline-secondary" href="${backHref}">${icon('arrow-left')} Back</a>
+        <div class="d-flex gap-2">
+          ${params.id ? `<a class="btn btn-outline-primary" href="#/stage/${escapeHtml(params.id)}">${icon('display')} Stage mode</a>` : ''}
+          <a class="btn btn-outline-secondary" href="${backHref}">${icon('arrow-left')} Back</a>
+        </div>
       </div>
 
       <div class="practice-stage mb-3">
@@ -102,6 +186,7 @@ export default {
                 <button class="btn btn-sm btn-outline-secondary" type="button" data-tempo="-5" aria-label="Slower by 5">−5</button>
                 <input type="range" class="form-range" id="tempo" min="30" max="300" value="${tempo}" aria-valuetext="${tempo} beats per minute">
                 <button class="btn btn-sm btn-outline-secondary" type="button" data-tempo="5" aria-label="Faster by 5">+5</button>
+                <button class="btn btn-sm btn-outline-secondary" type="button" id="tap" aria-keyshortcuts="T" title="Tap repeatedly (or press T) to set the tempo">Tap</button>
               </div>
             </div>
           </div>
@@ -118,6 +203,12 @@ export default {
                 <div class="form-check form-switch"><input class="form-check-input" type="checkbox" role="switch" id="o-metro" ${opts.metronome ? 'checked' : ''}><label class="form-check-label" for="o-metro">Metronome</label></div>
                 <div class="form-check form-switch"><input class="form-check-input" type="checkbox" role="switch" id="o-chords" checked><label class="form-check-label" for="o-chords">Play chords</label></div>
               </div>
+              <div class="row g-2 mt-1">
+                <div class="col-6"><label class="form-label small mb-1" for="o-groove">Backing band</label>
+                  <select id="o-groove" class="form-select form-select-sm">${GROOVES.map((g) => `<option value="${g.id}" ${g.id === opts.groove ? 'selected' : ''}>${escapeHtml(g.name)}</option>`).join('')}</select></div>
+                <div class="col-6"><label class="form-label small mb-1" for="o-sub">Metronome clicks</label>
+                  <select id="o-sub" class="form-select form-select-sm">${subdivisionOptions(opts.subdivision)}</select></div>
+              </div>
             </div>
             <div class="col-sm-6">
               <fieldset class="small">
@@ -133,9 +224,18 @@ export default {
               <input type="range" class="form-range" id="vol" min="0" max="100" value="${settings.volume}">
             </div>
           </div>
-          <p class="small text-body-secondary mt-2 mb-0">${icon('keyboard')} <kbd>Space</kbd> start/stop · <kbd>←</kbd>/<kbd>→</kbd> step through chords · <kbd>+</kbd>/<kbd>−</kbd> tempo</p>
+          <details class="mt-2">
+            <summary class="small fw-semibold">${icon('sliders')} Mixer</summary>
+            <div class="mt-2">${mixerHTML(settings.mix, 'pr-mix')}</div>
+          </details>
+          <p class="small text-body-secondary mt-2 mb-0">${icon('keyboard')} <kbd>Space</kbd> start/stop · <kbd>←</kbd>/<kbd>→</kbd> step through chords · <kbd>+</kbd>/<kbd>−</kbd> tempo · <kbd>T</kbd> tap tempo</p>
         </div>
       </div>
+
+      <details class="surface p-3 mb-3" id="fb-details">
+        <summary class="fw-semibold">${icon('distribute-horizontal')} Fretboard &amp; scales <span class="small text-body-secondary fw-normal">— follows the current chord</span></summary>
+        <div class="mt-2" id="fb-host"></div>
+      </details>
 
       <section class="surface p-3 mb-3" aria-labelledby="bars-h">
         <h2 class="h6" id="bars-h">Bars</h2>
@@ -151,7 +251,7 @@ export default {
       if (!ev) return '<div class="text-body-secondary small py-4">—</div>';
       const c = parseChord(ev.symbol);
       if (!c || c.nc) return `<div class="display-6 py-4">${escapeHtml(ev.symbol)}</div>`;
-      const v = resolveVoicing(ev.symbol, tuning, { capo: song.capo, voicingId: ev.voicingId });
+      const v = resolveVoicing(ev.symbol, tuning, { capo: song.capo, voicingId: ev.voicingId, prefs: songPrefs(song) });
       return chordDiagramSVG(ev.symbol, v, tuning, { width, leftHanded: getSettings().leftHanded, capo: song.capo });
     }
 
@@ -163,9 +263,14 @@ export default {
       }, []).map((s) => s + '</span>').join('');
     }
 
+    let fbPanel = null;
+    const fbProps = (ev) => ({ symbol: ev?.symbol, key: song.key, style: song.style, tuning, capo: song.capo, leftHanded: getSettings().leftHanded,
+      voicing: ev ? resolveVoicing(ev.symbol, tuning, { capo: song.capo, voicingId: ev.voicingId, prefs: songPrefs(song) }) : null });
+
     function highlight(i, speak = true) {
       currentIndex = i;
       const ev = events[i];
+      if (fbPanel && ev && parseChord(ev.symbol) && !parseChord(ev.symbol).nc) fbPanel.update(fbProps(ev));
       const next = events[(i + 1) % events.length];
       $('#now').innerHTML = diagram(ev, 240);
       $('#next').innerHTML = diagram(next, 120);
@@ -214,6 +319,7 @@ export default {
         sectionIds: opts.section ? [opts.section] : null, loop: opts.loop, countIn: opts.countIn, metronome: opts.metronome,
         chords: opts.chords, smooth: getSettings().smoothVoicing,
         trainer: opts.trainer ? { step: opts.step, every: opts.every, max: opts.max } : null,
+        grooveId: opts.groove, subdivision: opts.subdivision,
       });
       if (!ok) { toast('Nothing to play — this song has no bars yet.', { type: 'warning' }); return; }
       $('#loop-count').innerHTML = '&nbsp;';
@@ -240,7 +346,11 @@ export default {
       beatTimer = setInterval(() => { if (remaining-- <= 0 || !player.playing) { clearInterval(beatTimer); return; } tick(); }, 60000 / (player.tempo || tempo));
     }
 
+    offs.push(trackPracticeSessions(() => ({ ref: params.id || `preset:${query.preset}`, detail: song.title })));
     offs.push(on(el, 'click', '#play', () => (player.playing ? player.stop() : start())));
+    $('#fb-details').addEventListener('toggle', (e) => {
+      if (e.target.open && !fbPanel) fbPanel = mountFretboardPanel($('#fb-host'), fbProps(events[Math.max(0, currentIndex)]));
+    });
     offs.push(on(el, 'input', '#tempo', (e) => setTempo(Number(e.target.value))));
     offs.push(on(el, 'click', '[data-tempo]', (e, t) => setTempo(tempo + Number(t.dataset.tempo))));
     offs.push(on(el, 'input', '#vol', debounce((e) => { updateSettings({ volume: Number(e.target.value) }); player.setVolume(Number(e.target.value)); }, 100)));
@@ -250,6 +360,22 @@ export default {
     offs.push(on(el, 'change', '#o-countin', (e) => { opts.countIn = e.target.checked; }));
     offs.push(on(el, 'change', '#o-metro', (e) => { opts.metronome = e.target.checked; restartIfPlaying(); }));
     offs.push(on(el, 'change', '#o-chords', (e) => { opts.chords = e.target.checked; restartIfPlaying(); }));
+    offs.push(on(el, 'change', '#o-groove', (e) => {
+      opts.groove = e.target.value;
+      if (params.id && getSong(params.id)) saveSong({ ...getSong(params.id), groove: opts.groove });
+      restartIfPlaying();
+    }));
+    offs.push(on(el, 'change', '#o-sub', (e) => { opts.subdivision = Number(e.target.value); restartIfPlaying(); }));
+    offs.push(on(el, 'input', '[data-mix]', (e, t) => {
+      t.setAttribute('aria-valuetext', `${t.value} percent`);
+      player.setMix({ [t.dataset.mix]: Number(t.value) });
+    }));
+    offs.push(on(el, 'change', '[data-mix]', (e, t) => updateSettings({ mix: { ...getSettings().mix, [t.dataset.mix]: Number(t.value) } })));
+    const tap = () => {
+      const bpm = tapper.tap();
+      if (bpm) { setTempo(bpm); announce(`${bpm} beats per minute`); }
+    };
+    offs.push(on(el, 'click', '#tap', tap));
     offs.push(on(el, 'change', '#o-trainer', (e) => { opts.trainer = e.target.checked; if (opts.trainer && !opts.loop) { opts.loop = true; $('#o-loop').checked = true; } restartIfPlaying(); }));
     offs.push(on(el, 'change', '#t-step,#t-every,#t-max', () => {
       opts.step = Number($('#t-step').value) || 5; opts.every = Number($('#t-every').value) || 2; opts.max = Number($('#t-max').value) || 200;
@@ -258,7 +384,7 @@ export default {
       const i = Number(t.dataset.ev);
       stepIndex = i;
       highlight(i);
-      player.previewChord(events[i].symbol, tuning, { capo: song.capo, voicingId: events[i].voicingId });
+      player.previewChord(events[i].symbol, tuning, { capo: song.capo, voicingId: events[i].voicingId, prefs: songPrefs(song) });
     }));
     const onKey = (e) => {
       if (/INPUT|TEXTAREA|SELECT|BUTTON/.test(document.activeElement?.tagName) && e.key === ' ') {
@@ -266,8 +392,9 @@ export default {
       }
       if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName) && e.key !== ' ') return;
       if (e.key === ' ') { e.preventDefault(); player.playing ? player.stop() : start(); }
-      else if (e.key === 'ArrowRight' && !player.playing) { stepIndex = (stepIndex + 1) % events.length; highlight(stepIndex); player.previewChord(events[stepIndex].symbol, tuning, { capo: song.capo, voicingId: events[stepIndex].voicingId }); }
-      else if (e.key === 'ArrowLeft' && !player.playing) { stepIndex = (stepIndex - 1 + events.length) % events.length; highlight(stepIndex); player.previewChord(events[stepIndex].symbol, tuning, { capo: song.capo, voicingId: events[stepIndex].voicingId }); }
+      else if (e.key === 'ArrowRight' && !player.playing) { stepIndex = (stepIndex + 1) % events.length; highlight(stepIndex); player.previewChord(events[stepIndex].symbol, tuning, { capo: song.capo, voicingId: events[stepIndex].voicingId, prefs: songPrefs(song) }); }
+      else if (e.key === 'ArrowLeft' && !player.playing) { stepIndex = (stepIndex - 1 + events.length) % events.length; highlight(stepIndex); player.previewChord(events[stepIndex].symbol, tuning, { capo: song.capo, voicingId: events[stepIndex].voicingId, prefs: songPrefs(song) }); }
+      else if (e.key === 't' || e.key === 'T') tap();
       else if (e.key === '+' || e.key === '=') setTempo(tempo + 5);
       else if (e.key === '-' || e.key === '_') setTempo(tempo - 5);
     };
@@ -280,6 +407,6 @@ export default {
     drawSheet();
     if (events.length) highlight(0, false);
     stepIndex = 0;
-    return () => { offs.forEach((o) => o()); document.removeEventListener('keydown', onKey); ro.disconnect(); clearInterval(beatTimer); player.stop(); };
+    return () => { offs.forEach((o) => o()); document.removeEventListener('keydown', onKey); ro.disconnect(); clearInterval(beatTimer); player.stop(); fbPanel?.destroy(); };
   },
 };

@@ -78,4 +78,18 @@ export function fillInstrumentSelect(select, selected) {
   }).join('');
 }
 
+/** Mixer sliders (chords / bass / drums / click). Values 0–100. */
+export function mixerHTML(mix, idPrefix = 'mix') {
+  const parts = [['chords', 'Chords', 'music-note-beamed'], ['bass', 'Bass', 'soundwave'], ['drums', 'Drums', 'vinyl'], ['click', 'Metronome', 'stopwatch']];
+  return `<div class="mixer">${parts.map(([k, label, ic]) => `
+    <div><label class="form-label small mb-0" for="${idPrefix}-${k}">${icon(ic)} ${label}</label>
+      <input type="range" class="form-range" id="${idPrefix}-${k}" data-mix="${k}" min="0" max="100" value="${mix[k]}" aria-valuetext="${mix[k]} percent"></div>`).join('')}</div>`;
+}
+
+/** Metronome subdivision select options. */
+export function subdivisionOptions(selected) {
+  return [[1, 'Beats only'], [2, 'Eighths'], [3, 'Triplets'], [4, 'Sixteenths']]
+    .map(([v, l]) => `<option value="${v}" ${v === selected ? 'selected' : ''}>${l}</option>`).join('');
+}
+
 export { keyLabel };

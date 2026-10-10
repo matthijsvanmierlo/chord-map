@@ -1,4 +1,5 @@
 // Song / progression editor.
+import { songPrefs } from '../music/voicingPrefs.js';
 import { getSong, saveSong, deleteSong, createSong, getSettings, updateMeta, subscribe, flush } from '../state/store.js';
 import { newSection, newBar, newId } from '../state/schema.js';
 import { History } from '../state/history.js';
@@ -8,7 +9,15 @@ import { transposeSong, barBeats, diatonicChords } from '../music/song.js';
 import { parseBarText, barsToText, splitEvenly } from '../music/roman.js';
 import { chordLabel } from '../render/notation.js';
 import { renderLeadSheet } from '../render/leadSheet.js';
-import { STRUM_PATTERNS } from '../data/strumPatterns.js';
+import { allPatterns } from '../data/strumPatterns.js';
+import { GROOVES, getGroove } from '../data/grooves.js';
+import { createTapTempo } from '../ui/tapTempo.js';
+import { voicingPrefsFormHTML, readVoicingPrefsForm } from '../ui/voicingPrefsForm.js';
+import { STYLE_LABELS } from '../music/voicingPrefs.js';
+import { suggestCapo } from '../music/capo.js';
+import { reharmSuggestions } from '../music/reharm.js';
+import { songHasLyrics } from '../music/lyrics.js';
+import { prettyChord } from '../music/chordParser.js';
 import { STYLES } from '../data/presets/index.js';
 import { openChordEditor } from '../ui/chordEditor.js';
 import { exportMenuHTML, runExport } from '../ui/exportMenu.js';
@@ -48,6 +57,7 @@ export default {
     updateMeta({ lastSongId: song.id });
     const history = new History();
     let textMode = false;
+    let lyricsMode = songHasLyrics(song);
     let focusKey = null;
 
     const tuning = () => getTuning(song.instrumentId);
@@ -74,11 +84,16 @@ export default {
           <div class="col-6 col-md-2"><label class="form-label small mb-1" for="f-tonic">Key</label><select id="f-tonic" class="form-select form-select-sm"></select></div>
           <div class="col-6 col-md-2"><label class="form-label small mb-1" for="f-mode">Mode</label><select id="f-mode" class="form-select form-select-sm"></select></div>
           <div class="col-4 col-md-1"><label class="form-label small mb-1" for="f-meter">Time</label><select id="f-meter" class="form-select form-select-sm">${METERS.map((m) => `<option>${m}</option>`).join('')}</select></div>
-          <div class="col-4 col-md-1"><label class="form-label small mb-1" for="f-tempo">Tempo</label><input id="f-tempo" type="number" min="20" max="400" class="form-control form-control-sm"></div>
+          <div class="col-8 col-md-2"><label class="form-label small mb-1" for="f-tempo">Tempo (bpm)</label>
+            <div class="input-group input-group-sm"><input id="f-tempo" type="number" min="20" max="400" class="form-control">
+            <button class="btn btn-outline-secondary" type="button" data-act="tap" title="Tap repeatedly to set the tempo">Tap</button></div></div>
           <div class="col-4 col-md-1"><label class="form-label small mb-1" for="f-capo">Capo</label><select id="f-capo" class="form-select form-select-sm">${Array.from({ length: 13 }, (_, i) => `<option value="${i}">${i || 'None'}</option>`).join('')}</select></div>
-          <div class="col-12 col-md-3"><label class="form-label small mb-1" for="f-instrument">Instrument</label><select id="f-instrument" class="form-select form-select-sm"></select></div>
-          <div class="col-8 col-md-2"><label class="form-label small mb-1" for="f-pattern">Strum pattern</label><select id="f-pattern" class="form-select form-select-sm">${STRUM_PATTERNS.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('')}</select></div>
-          <div class="col-4 col-md-12 d-flex align-items-end"><div class="form-check form-switch mb-1"><input class="form-check-input" type="checkbox" role="switch" id="f-swing"><label class="form-check-label small" for="f-swing">Swing feel</label></div></div>
+          <div class="col-12 col-md-4"><label class="form-label small mb-1" for="f-instrument">Instrument</label><select id="f-instrument" class="form-select form-select-sm"></select></div>
+          <div class="col-6 col-md-3"><label class="form-label small mb-1" for="f-pattern">Strum pattern</label><select id="f-pattern" class="form-select form-select-sm"></select></div>
+          <div class="col-6 col-md-3"><label class="form-label small mb-1" for="f-groove">Backing band</label><select id="f-groove" class="form-select form-select-sm">${GROOVES.map((g) => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('')}</select></div>
+          <div class="col-4 col-md-2 d-flex align-items-end"><div class="form-check form-switch mb-1"><input class="form-check-input" type="checkbox" role="switch" id="f-swing"><label class="form-check-label small" for="f-swing">Swing feel</label></div></div>
+          <div class="col-4 col-md-2 d-flex align-items-end"><button class="btn btn-sm btn-outline-secondary w-100" type="button" data-act="shapes" id="shapes-btn">${icon('sliders')} Shapes</button></div>
+          <div class="col-4 col-md-2 d-flex align-items-end"><button class="btn btn-sm btn-outline-secondary w-100" type="button" data-act="capo-suggest">${icon('magic')} Capo helper</button></div>
         </div>
       </div>
 
@@ -93,6 +108,7 @@ export default {
           <button class="btn btn-outline-secondary" type="button" data-act="transpose" data-step="1" title="Transpose up a semitone">${icon('plus')}<span class="visually-hidden">Transpose up</span></button>
         </div>
         <button class="btn btn-outline-secondary" type="button" data-act="textmode" aria-pressed="false">${icon('fonts')} <span>Type as text</span></button>
+        <button class="btn btn-outline-secondary ${lyricsMode ? 'active' : ''}" type="button" data-act="lyrics" aria-pressed="${lyricsMode}">${icon('chat-quote')} <span>Lyrics</span></button>
         <button class="btn btn-primary" type="button" data-act="play">${icon('play-fill')} <span>Play</span></button>
         <a class="btn btn-outline-primary" href="#/practice/${escapeHtml(song.id)}">${icon('bullseye')} Practise</a>
         ${exportMenuHTML('editor-export')}
@@ -174,7 +190,12 @@ export default {
       $('#f-capo').value = String(song.capo);
       fillInstrumentSelect($('#f-instrument'), song.instrumentId);
       if (!allTunings().some((t) => t.id === song.instrumentId)) $('#f-instrument').insertAdjacentHTML('afterbegin', `<option selected value="${escapeHtml(song.instrumentId)}">Unknown tuning (${escapeHtml(song.instrumentId)}) — using standard guitar</option>`);
+      $('#f-pattern').innerHTML = allPatterns().map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}${p.custom ? ' (custom)' : ''}</option>`).join('');
       $('#f-pattern').value = song.strumPatternId;
+      if ($('#f-pattern').value !== song.strumPatternId) $('#f-pattern').insertAdjacentHTML('afterbegin', `<option selected value="${escapeHtml(song.strumPatternId)}">Missing pattern — using quarter notes</option>`);
+      $('#f-groove').value = getGroove(song.groove).id;
+      $('#shapes-btn').innerHTML = `${icon('sliders')} ${song.voicingPrefs ? escapeHtml(song.voicingPrefs.style === 'any' ? 'Custom shapes' : STYLE_LABELS[song.voicingPrefs.style].replace(/ \(.*\)/, '')) : 'Shapes'}`;
+      $('#shapes-btn').setAttribute('aria-label', `Chord shape preferences for this song: ${song.voicingPrefs ? 'custom' : 'app default'}`);
       $('#f-swing').checked = song.swing;
       if (document.activeElement !== $('#f-notes')) $('#f-notes').value = song.notes;
       $('#f-style').value = song.style || '';
@@ -218,6 +239,9 @@ export default {
           ${bar.chords.map((c, ci) => chordPill(sec, bar, c, ci)).join('')}
           ${bar.chords.length < 8 ? `<button type="button" class="btn btn-sm btn-link px-1" data-bar-act="add-chord" data-sec="${sec.id}" data-bar-id="${bar.id}" aria-label="Add chord to bar ${bi + 1}" data-key="addchord-${bar.id}">${icon('plus-circle')}</button>` : ''}
         </div>
+        ${lyricsMode ? `<label class="visually-hidden" for="ly-${bar.id}">Lyrics for bar ${bi + 1}${bar.chords.length > 1 ? ' (type ^ where the next chord starts)' : ''}</label>
+          <input id="ly-${bar.id}" class="form-control form-control-sm bar-lyric" data-lyric="${sec.id}|${bar.id}" data-key="ly-${bar.id}" maxlength="500"
+            placeholder="${bar.chords.length > 1 ? 'Words… ^ next chord' : 'Words…'}" value="${escapeHtml(bar.lyric || '')}">` : ''}
       </div>`;
     }
 
@@ -359,6 +383,12 @@ export default {
           drawSections();
           schedulePreview();
         },
+        ideas: () => reharmSuggestions(song, secId, barId, ci),
+        onApplyIdea: (idea) => {
+          const next = idea.apply(song);
+          commit((s) => { s.sections = next.sections; }, { label: `Applied ${idea.label}` });
+          toast(`Applied: ${idea.label}`, { type: 'success', action: { label: 'Undo', run: () => restore(history.undo(song), 'Undone') } });
+        },
         onRemove: () => commit((s) => {
           const b = findBar(s, secId, barId);
           b.chords.splice(ci, 1);
@@ -403,6 +433,9 @@ export default {
     metaInput('#f-instrument', (s, t) => { s.instrumentId = t.value; s.sections.forEach((x) => x.bars.forEach((b) => b.chords.forEach((c) => { c.voicingId = null; }))); });
     metaInput('#f-pattern', (s, t) => { s.strumPatternId = t.value; });
     metaInput('#f-swing', (s, t) => { s.swing = t.checked; });
+    metaInput('#f-groove', (s, t) => { s.groove = t.value; });
+    const tapper = createTapTempo();
+    let tapTimer = null;
     metaInput('#f-mode', (s, t) => { s.key = { ...s.key, mode: t.value }; });
     offs.push(on(el, 'change', '#f-meter', (e) => {
       const [num, den] = e.target.value.split('/').map(Number);
@@ -504,6 +537,14 @@ export default {
         el.querySelector(`[data-sec-errors="${secId}"]`).innerHTML = `<span class="text-success">${icon('check2')} Applied ${bars.length} bars</span>`;
       }
     }));
+    offs.push(on(el, 'change', '[data-lyric]', (e, t) => {
+      const [secId, barId] = t.dataset.lyric.split('|');
+      commit((s) => {
+        const bar = findBar(s, secId, barId);
+        const v = t.value.replace(/[\r\n]+/g, ' ').slice(0, 500);
+        if (v.trim()) bar.lyric = v; else delete bar.lyric;
+      }, { redraw: false });
+    }));
     offs.push(on(el, 'change', '[data-sec-name]', (e, t) => commit((s) => { findSec(s, t.dataset.secName).name = t.value.trim() || 'Section'; }, { redraw: false })));
     offs.push(on(el, 'change', '[data-sec-repeat]', (e, t) => commit((s) => { findSec(s, t.dataset.secRepeat).repeat = Number(t.value); }, { redraw: false })));
     offs.push(on(el, 'click', '[data-form-add]', (e, t) => commit((s) => {
@@ -520,7 +561,7 @@ export default {
         if (act === 'right' && i < s.form.length - 1) [s.form[i + 1], s.form[i]] = [s.form[i], s.form[i + 1]];
       }, { label: 'Arrangement updated' });
     }));
-    offs.push(on(el, 'click', '[data-chord]', (e, t) => player.previewChord(t.dataset.chord, tuning(), { capo: song.capo, voicingId: t.dataset.voicing || null })));
+    offs.push(on(el, 'click', '[data-chord]', (e, t) => player.previewChord(t.dataset.chord, tuning(), { capo: song.capo, voicingId: t.dataset.voicing || null, prefs: songPrefs(song) })));
     offs.push(on(el, 'click', '[data-export]', (e, t) => runExport(t.dataset.export, {
       song, tuning: tuning(), sheetEl: previewEl.querySelector('.lead-sheet'), printHref: `#/print/${song.id}`, smooth: getSettings().smoothVoicing,
     })));
@@ -530,9 +571,57 @@ export default {
     }));
     offs.push(on(el, 'click', '[data-act]', async (e, t) => {
       const act = t.dataset.act;
+      if (act === 'tap') {
+        const bpm = tapper.tap();
+        if (bpm) {
+          $('#f-tempo').value = bpm;
+          announce(`${bpm} beats per minute`);
+          clearTimeout(tapTimer);
+          tapTimer = setTimeout(() => commit((s) => { s.tempo = bpm; }, { label: `Tempo ${bpm}` }), 1500);
+        }
+      }
+      if (act === 'shapes') {
+        const res = await dialog({
+          title: 'Chord shapes for this song',
+          body: `<div class="form-check form-switch mb-3"><input class="form-check-input" type="checkbox" role="switch" id="vp-default" ${song.voicingPrefs ? '' : 'checked'}>
+              <label class="form-check-label" for="vp-default">Use my default shape preferences (Settings)</label></div>
+            <fieldset id="vp-fields" ${song.voicingPrefs ? '' : 'disabled'}><legend class="visually-hidden">Custom shape preferences</legend>
+            ${voicingPrefsFormHTML(song.voicingPrefs || getSettings().voicing, 'svp')}</fieldset>
+            <p class="small text-body-secondary mt-3 mb-0">Shapes you locked on individual chords are kept. If no shape matches, the usual shapes are shown instead.</p>`,
+          buttons: [{ label: 'Cancel', value: null }, { label: 'Apply', value: 'ok', variant: 'primary' }],
+          onShown: (d) => d.querySelector('#vp-default').addEventListener('change', (e) => { d.querySelector('#vp-fields').disabled = e.target.checked; }),
+          collect: (d) => ({ prefs: d.querySelector('#vp-default').checked ? null : readVoicingPrefsForm(d, 'svp') }),
+        });
+        if (res) commit((s) => { s.voicingPrefs = res.prefs; }, { label: 'Shape preferences updated' });
+      }
+      if (act === 'capo-suggest') {
+        const ranked = suggestCapo(song, tuning()).slice(0, 6);
+        if (!ranked.length) { toast('Add some chords first.', { type: 'info' }); return; }
+        const pick = await dialog({
+          title: 'Capo helper',
+          body: `<p class="small">Positions ranked by how many easy open shapes they give you. The song keeps sounding in ${escapeHtml(keyLabel(song.key))}.</p>
+            <fieldset><legend class="visually-hidden">Capo position</legend>
+            ${ranked.map((r, i) => `<div class="form-check border-bottom py-2">
+              <input class="form-check-input" type="radio" name="capo-pick" id="cp-${r.capo}" value="${r.capo}" ${i === 0 ? 'checked' : ''}>
+              <label class="form-check-label w-100" for="cp-${r.capo}"><strong>${r.capo ? `Capo ${r.capo}` : 'No capo'}</strong> — play in <strong>${escapeHtml(prettyChord(r.shapeKey))}</strong> shapes
+                ${r.capo === song.capo ? '<span class="badge text-bg-secondary ms-1">current</span>' : ''}
+                <span class="d-block small text-body-secondary">${r.shapes.map((x) => `${escapeHtml(prettyChord(x.shape))}${x.open ? '' : '*'}`).join(' · ')} — ${r.openCount}/${r.shapes.length} open shapes</span></label></div>`).join('')}
+            </fieldset><p class="small text-body-secondary mt-2 mb-0">* barre or higher-position shape</p>`,
+          buttons: [{ label: 'Cancel', value: null }, { label: 'Use this capo', value: 'ok', variant: 'primary' }],
+          collect: (d) => Number(d.querySelector('input[name="capo-pick"]:checked').value),
+        });
+        if (pick !== null && pick !== undefined) commit((s) => { s.capo = pick; s.sections.forEach((x) => x.bars.forEach((b) => b.chords.forEach((c) => { c.voicingId = null; }))); }, { label: pick ? `Capo ${pick}` : 'No capo' });
+      }
       if (act === 'undo') restore(history.undo(song), 'Undone');
       if (act === 'redo') restore(history.redo(song), 'Redone');
       if (act === 'transpose') transposeBy(Number(t.dataset.step));
+      if (act === 'lyrics') {
+        lyricsMode = !lyricsMode;
+        t.setAttribute('aria-pressed', String(lyricsMode));
+        t.classList.toggle('active', lyricsMode);
+        drawSections();
+        if (lyricsMode) el.querySelector('[data-lyric]')?.focus();
+      }
       if (act === 'textmode') {
         textMode = !textMode;
         t.setAttribute('aria-pressed', String(textMode));
@@ -550,7 +639,7 @@ export default {
         if (player.playing) { player.stop(); return; }
         if (!player.available) { toast('Audio library is not available.', { type: 'warning' }); return; }
         const s = getSettings();
-        if (await player.load(song, tuning(), { loop: false, countIn: s.countIn, metronome: s.metronome, smooth: s.smoothVoicing })) player.play();
+        if (await player.load(song, tuning(), { loop: false, countIn: s.countIn, metronome: s.metronome, subdivision: s.metronomeSubdivision, smooth: s.smoothVoicing })) player.play();
       }
       if (act === 'duplicate') {
         const copy = createSong({ ...structuredClone(song), id: undefined, title: `${song.title} (copy)`, createdAt: undefined, updatedAt: undefined });

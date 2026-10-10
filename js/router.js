@@ -12,6 +12,12 @@ const routes = [
   { pattern: /^settings$/, view: 'settings', nav: 'settings' },
   { pattern: /^help$/, view: 'help', nav: 'help' },
   { pattern: /^print\/([\w-]+)$/, view: 'print', nav: '', params: ['id'] },
+  { pattern: /^shared$/, view: 'sharedSong', nav: 'songs' },
+  { pattern: /^setlist\/([\w-]+)$/, view: 'setlist', nav: 'songs', params: ['id'] },
+  { pattern: /^stage\/setlist\/([\w-]+)$/, view: 'stage', nav: 'practice', params: ['setlistId'] },
+  { pattern: /^stage\/([\w-]+)$/, view: 'stage', nav: 'practice', params: ['id'] },
+  { pattern: /^train$/, view: 'train', nav: 'train' },
+  { pattern: /^print\/setlist\/([\w-]+)$/, view: 'print', nav: '', params: ['setlistId'] },
 ];
 
 let cleanup = null;

@@ -1,4 +1,6 @@
 // Standard staff + TAB rendering with VexFlow (window.Vex, loaded via vendor-loader).
+import { songPrefs } from '../music/voicingPrefs.js';
+import { splitLyric } from '../music/lyrics.js';
 import { parseChord, prettyChord } from '../music/chordParser.js';
 import { chordToRoman, prettyRoman } from '../music/roman.js';
 import { resolveVoicing, voicingMidi } from '../music/voicingEngine.js';
@@ -122,12 +124,13 @@ export function renderNotation(container, song, opts) {
         const staffNotes = [], tabNotes = [], ties = [];
         let used = 0;
         const altParts = [];
-        bar.chords.forEach((c) => {
+        const lyricSegs = opts.lyrics && bar.lyric ? splitLyric(bar.lyric, bar.chords.length) : null;
+        bar.chords.forEach((c, chordIdx) => {
           const chord = parseChord(c.symbol);
           altParts.push(`${chordLabel(c.symbol, song.key, display)} (${c.beats} beat${c.beats > 1 ? 's' : ''})`);
           const pieces = splitDuration(Math.min(c.beats, Math.max(0, num - used)) || c.beats, den);
           used += c.beats;
-          const v = chord && !chord.nc ? resolveVoicing(c.symbol, tuning, { capo, voicingId: c.voicingId, previous: prevVoicing, smooth }) : null;
+          const v = chord && !chord.nc ? resolveVoicing(c.symbol, tuning, { capo, voicingId: c.voicingId, previous: prevVoicing, smooth, prefs: songPrefs(song) }) : null;
           if (v) prevVoicing = v;
           const label = chordLabel(c.symbol, song.key, display);
           let prev = null;
@@ -155,6 +158,12 @@ export function renderNotation(container, song, opts) {
               ann.setFont('Arial', 13, 'bold');
               if (sn) sn.addModifier(ann, 0);
               else if (tn) tn.addModifier(ann, 0);
+            }
+            const words = k === 0 && lyricSegs ? lyricSegs[chordIdx].trim() : '';
+            if (words && sn) {
+              const ly = new VF.Annotation(words.length > 18 ? words.slice(0, 17) + '…' : words).setVerticalJustification(VF.Annotation.VerticalJustify.BOTTOM);
+              ly.setFont('Georgia', 11, 'italic');
+              sn.addModifier(ly, 0);
             }
             if (sn && prev && v) ties.push([prev, sn]);
             if (sn) { staffNotes.push(sn); prev = sn; }

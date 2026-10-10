@@ -1,7 +1,9 @@
-import { getState, createSong, deleteSong, saveSong, subscribe, getSettings } from '../state/store.js';
+import { getState, createSong, deleteSong, saveSong, subscribe, getSettings, saveSetlist } from '../state/store.js';
+import { newSetlist } from '../state/schema.js';
+import { setQuery } from '../router.js';
 import { escapeHtml, icon, on, debounce, formatDate, download } from '../ui/dom.js';
 import { navigate } from '../router.js';
-import { toast, confirmDialog, promptDialog } from '../ui/feedback.js';
+import { toast, confirmDialog, promptDialog, dialog } from '../ui/feedback.js';
 import { importFiles, bindDropZone, songFromPlainText } from '../ui/importer.js';
 import { uniqueChords } from '../music/song.js';
 import { prettyChord } from '../music/chordParser.js';
@@ -12,7 +14,8 @@ import { emptyState, styleInfo, startActionsHTML } from './shared.js';
 
 export default {
   title: () => 'My Songs',
-  render(el) {
+  render(el, { query = {} } = {}) {
+    let tab = query.tab === 'setlists' ? 'setlists' : 'songs';
     let q = '';
     let sort = 'updated';
     const selected = new Set();
@@ -27,9 +30,21 @@ export default {
           <button class="btn btn-primary" type="button" data-act="new">${icon('plus-lg')} New song</button>
           <button class="btn btn-outline-primary" type="button" data-act="paste">${icon('clipboard')} Paste chords</button>
           <button class="btn btn-outline-secondary" type="button" data-pick-file="import-file">${icon('upload')} Import</button>
-          <input id="import-file" type="file" class="d-none" tabindex="-1" aria-hidden="true" accept=".json,.cho,.chopro,.chordpro,.crd,.pro,.txt,application/json,text/plain" multiple>
+          <input id="import-file" type="file" class="d-none" tabindex="-1" aria-hidden="true" accept=".json,.cho,.chopro,.chordpro,.crd,.pro,.txt,.musicxml,.xml,.mxl,application/json,text/plain" multiple>
         </div>
       </div>
+      <ul class="nav nav-tabs mb-3" role="tablist">
+        <li class="nav-item" role="presentation"><button class="nav-link" id="tab-songs" data-tab="songs" type="button" role="tab" aria-controls="pane-songs">${icon('music-note-list')} Songs</button></li>
+        <li class="nav-item" role="presentation"><button class="nav-link" id="tab-setlists" data-tab="setlists" type="button" role="tab" aria-controls="pane-setlists">${icon('list-ol')} Setlists</button></li>
+      </ul>
+      <div id="pane-setlists" role="tabpanel" aria-labelledby="tab-setlists">
+        <div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+          <p class="lead-soft mb-0 me-auto">Group songs for a gig, a lesson or a practice session — and print them as one songbook.</p>
+          <button class="btn btn-primary" type="button" data-act="new-setlist">${icon('plus-lg')} New setlist</button>
+        </div>
+        <div id="setlists"></div>
+      </div>
+      <div id="pane-songs" role="tabpanel" aria-labelledby="tab-songs">
       <div class="surface p-3 mb-3 d-flex flex-wrap gap-2 align-items-center">
         <label class="visually-hidden" for="s-q">Search songs</label>
         <input id="s-q" type="search" class="form-control" style="max-width: 22rem" placeholder="Search title, artist, tag, chord…">
@@ -40,9 +55,35 @@ export default {
           <option value="created">Newest first</option>
         </select>
         <button class="btn btn-outline-secondary" type="button" data-act="export-selected" disabled>${icon('download')} Export selected (<span id="sel-count">0</span>)</button>
+        <button class="btn btn-outline-secondary" type="button" data-act="setlist-selected" disabled>${icon('list-ol')} Add to setlist</button>
       </div>
       <div id="list"></div>
-      <div class="dropzone mt-4 small text-body-secondary" id="drop">${icon('cloud-arrow-up')} Drop a backup (.json), ChordPro (.cho) or text chord chart here to import.</div>`;
+      </div>
+      <div class="dropzone mt-4 small text-body-secondary" id="drop">${icon('cloud-arrow-up')} Drop a backup (.json), setlist, ChordPro (.cho), MusicXML (.musicxml / .mxl) or text chord chart here to import.</div>`;
+
+    function showTab(name, focus = false) {
+      tab = name;
+      el.querySelectorAll('[data-tab]').forEach((b) => {
+        const active = b.dataset.tab === tab;
+        b.classList.toggle('active', active);
+        b.setAttribute('aria-selected', String(active));
+        b.tabIndex = active ? 0 : -1;
+      });
+      el.querySelector('#pane-songs').hidden = tab !== 'songs';
+      el.querySelector('#pane-setlists').hidden = tab !== 'setlists';
+      setQuery({ tab: tab === 'setlists' ? 'setlists' : '' });
+      if (focus) el.querySelector(`[data-tab="${tab}"]`).focus();
+    }
+
+    function drawSetlists() {
+      const lists = [...getState().setlists].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      el.querySelector('#setlists').innerHTML = lists.length ? `<div class="list-group">${lists.map((l) => `
+        <a class="list-group-item list-group-item-action d-flex justify-content-between align-items-center" href="#/setlist/${escapeHtml(l.id)}">
+          <span><strong>${escapeHtml(l.name)}</strong> <span class="small text-body-secondary">· ${l.songIds.length} song${l.songIds.length === 1 ? '' : 's'}</span></span>
+          <span class="small text-body-secondary">Edited ${formatDate(l.updatedAt)}</span>
+        </a>`).join('')}</div>`
+        : emptyState('list-ol', 'No setlists yet', 'Create one, or select songs in the Songs tab and choose “Add to setlist”.', `<button class="btn btn-primary" type="button" data-act="new-setlist">${icon('plus-lg')} New setlist</button>`);
+    }
 
     const list = el.querySelector('#list');
 
@@ -59,6 +100,8 @@ export default {
             : b.updatedAt.localeCompare(a.updatedAt)));
       el.querySelector('#sel-count').textContent = selected.size;
       el.querySelector('[data-act="export-selected"]').disabled = !selected.size;
+      el.querySelector('[data-act="setlist-selected"]').disabled = !selected.size;
+      drawSetlists();
       if (!getState().songs.length) {
         list.innerHTML = emptyState('music-note-list', 'No songs yet', 'Start from a progression in Explore, build one from scratch, or paste a chord chart.', startActionsHTML());
         return;
@@ -94,7 +137,11 @@ export default {
     const offs = [];
     offs.push(on(el, 'input', '#s-q', debounce((e) => { q = e.target.value.trim(); draw(); }, 150)));
     offs.push(on(el, 'change', '#s-sort', (e) => { sort = e.target.value; draw(); }));
-    offs.push(on(el, 'change', '[data-select]', (e, t) => { if (t.checked) selected.add(t.dataset.select); else selected.delete(t.dataset.select); el.querySelector('#sel-count').textContent = selected.size; el.querySelector('[data-act="export-selected"]').disabled = !selected.size; }));
+    offs.push(on(el, 'change', '[data-select]', (e, t) => { if (t.checked) selected.add(t.dataset.select); else selected.delete(t.dataset.select); el.querySelector('#sel-count').textContent = selected.size; el.querySelector('[data-act="export-selected"]').disabled = !selected.size; el.querySelector('[data-act="setlist-selected"]').disabled = !selected.size; }));
+    offs.push(on(el, 'click', '[data-tab]', (e, t) => showTab(t.dataset.tab)));
+    offs.push(on(el, 'keydown', '[role="tab"]', (e) => {
+      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); showTab(tab === 'songs' ? 'setlists' : 'songs', true); }
+    }));
     offs.push(on(el, 'click', '[data-pick-file]', (e, t) => el.querySelector(`#${t.dataset.pickFile}`).click()));
     offs.push(on(el, 'change', '#import-file', async (e) => { const files = [...e.target.files]; e.target.value = ''; if (files.length) { await importFiles(files); draw(); } }));
     offs.push(on(el, 'click', '[data-dup]', (e, t) => {
@@ -128,6 +175,31 @@ export default {
           if (errors.length) toast(`Skipped: ${errors.slice(0, 3).join('; ')}`, { type: 'warning' });
           navigate(`song/${song.id}`);
         } catch (err) { toast(err.message, { type: 'danger' }); }
+      } else if (act === 'new-setlist') {
+        const name = await promptDialog('New setlist', 'Name', 'My setlist', { placeholder: 'e.g. Friday gig' });
+        if (name === null) return;
+        const l = saveSetlist(newSetlist(name.trim() || 'My setlist'));
+        navigate(`setlist/${l.id}`);
+      } else if (act === 'setlist-selected') {
+        const lists = getState().setlists;
+        const target = await dialog({
+          title: `Add ${selected.size} song${selected.size === 1 ? '' : 's'} to a setlist`,
+          body: `<label class="form-label" for="sl-pick">Setlist</label>
+            <select id="sl-pick" class="form-select">${lists.map((l) => `<option value="${escapeHtml(l.id)}">${escapeHtml(l.name)}</option>`).join('')}<option value="__new">➕ New setlist…</option></select>
+            <div class="mt-2" id="sl-new-wrap" ${lists.length ? 'hidden' : ''}><label class="form-label small" for="sl-new">New setlist name</label><input id="sl-new" class="form-control" value="My setlist"></div>`,
+          buttons: [{ label: 'Cancel', value: null }, { label: 'Add', value: 'ok', variant: 'primary' }],
+          onShown: (d) => {
+            const sel = d.querySelector('#sl-pick');
+            if (!lists.length) sel.value = '__new';
+            sel.addEventListener('change', () => { d.querySelector('#sl-new-wrap').hidden = sel.value !== '__new'; });
+          },
+          collect: (d) => ({ id: d.querySelector('#sl-pick').value, name: d.querySelector('#sl-new').value.trim() || 'My setlist' }),
+        });
+        if (!target) return;
+        const ordered = getState().songs.filter((s) => selected.has(s.id)).map((s) => s.id);
+        const base = target.id === '__new' ? newSetlist(target.name) : getState().setlists.find((l) => l.id === target.id);
+        const l = saveSetlist({ ...base, songIds: [...base.songIds, ...ordered.filter((id) => !base.songIds.includes(id))] });
+        toast(`Added to “${l.name}”`, { action: { label: 'Open', run: () => navigate(`setlist/${l.id}`) } });
       } else if (act === 'export-selected') {
         const songs = getState().songs.filter((s) => selected.has(s.id));
         const data = { ...buildBackup({ songs, settings: getState().settings, meta: getState().meta }), kind: 'songs', settings: undefined };
@@ -136,8 +208,9 @@ export default {
       }
     }));
     offs.push(bindDropZone(el.querySelector('#drop'), draw));
-    offs.push(subscribe((s, reason) => { if (reason === 'songs' || reason === 'replaced') draw(); }));
+    offs.push(subscribe((s, reason) => { if (['songs', 'replaced', 'setlists', 'external'].includes(reason)) draw(); }));
     draw();
+    showTab(tab);
     return () => offs.forEach((o) => o());
   },
 };

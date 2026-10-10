@@ -18,3 +18,8 @@ main { padding: 0 !important; max-width: none !important; }
 .chord-line { font-size: 10pt; color: #333; }
 .badge { border: 1px solid #000; color: #000 !important; background: none !important; }
 a[href]::after { content: none !important; }
+.ls-chord { color: #000 !important; }
+.ls-bar { border-left-color: #999 !important; }
+.songbook-song { break-before: page; }
+.songbook-cover { break-after: avoid; }
+.songbook-song { border-top: none !important; margin-top: 0 !important; padding-top: 0 !important; }
