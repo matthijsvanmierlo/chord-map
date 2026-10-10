@@ -8,7 +8,7 @@ import { prettyChord } from '../music/chordParser.js';
 import { keyLabel } from '../music/theory.js';
 import { getTuning } from '../music/tunings.js';
 import { buildBackup } from '../export/backup.js';
-import { emptyState, styleInfo } from './shared.js';
+import { emptyState, styleInfo, startActionsHTML } from './shared.js';
 
 export default {
   title: () => 'My Songs',
@@ -26,8 +26,8 @@ export default {
         <div class="d-flex flex-wrap gap-2">
           <button class="btn btn-primary" type="button" data-act="new">${icon('plus-lg')} New song</button>
           <button class="btn btn-outline-primary" type="button" data-act="paste">${icon('clipboard')} Paste chords</button>
-          <label class="btn btn-outline-secondary mb-0" for="import-file">${icon('upload')} Import</label>
-          <input id="import-file" type="file" class="visually-hidden" accept=".json,.cho,.chopro,.chordpro,.crd,.pro,.txt,application/json,text/plain" multiple>
+          <button class="btn btn-outline-secondary" type="button" data-pick-file="import-file">${icon('upload')} Import</button>
+          <input id="import-file" type="file" class="d-none" tabindex="-1" aria-hidden="true" accept=".json,.cho,.chopro,.chordpro,.crd,.pro,.txt,application/json,text/plain" multiple>
         </div>
       </div>
       <div class="surface p-3 mb-3 d-flex flex-wrap gap-2 align-items-center">
@@ -60,8 +60,7 @@ export default {
       el.querySelector('#sel-count').textContent = selected.size;
       el.querySelector('[data-act="export-selected"]').disabled = !selected.size;
       if (!getState().songs.length) {
-        list.innerHTML = emptyState('music-note-list', 'No songs yet', 'Start from a progression in Explore, build one from scratch, or paste a chord chart.',
-          `<div class="d-flex justify-content-center gap-2 flex-wrap"><a class="btn btn-primary" href="#/explore">${icon('compass')} Explore progressions</a><button class="btn btn-outline-primary" type="button" data-act="new">${icon('plus-lg')} New song</button></div>`);
+        list.innerHTML = emptyState('music-note-list', 'No songs yet', 'Start from a progression in Explore, build one from scratch, or paste a chord chart.', startActionsHTML());
         return;
       }
       if (!songs.length) { list.innerHTML = emptyState('search', 'No matches', 'Try a different search.'); return; }
@@ -96,6 +95,7 @@ export default {
     offs.push(on(el, 'input', '#s-q', debounce((e) => { q = e.target.value.trim(); draw(); }, 150)));
     offs.push(on(el, 'change', '#s-sort', (e) => { sort = e.target.value; draw(); }));
     offs.push(on(el, 'change', '[data-select]', (e, t) => { if (t.checked) selected.add(t.dataset.select); else selected.delete(t.dataset.select); el.querySelector('#sel-count').textContent = selected.size; el.querySelector('[data-act="export-selected"]').disabled = !selected.size; }));
+    offs.push(on(el, 'click', '[data-pick-file]', (e, t) => el.querySelector(`#${t.dataset.pickFile}`).click()));
     offs.push(on(el, 'change', '#import-file', async (e) => { const files = [...e.target.files]; e.target.value = ''; if (files.length) { await importFiles(files); draw(); } }));
     offs.push(on(el, 'click', '[data-dup]', (e, t) => {
       const s = getState().songs.find((x) => x.id === t.dataset.dup);

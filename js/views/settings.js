@@ -73,8 +73,8 @@ export default {
             <p class="small text-body-secondary mb-2" id="backup-info"></p>
             <div class="d-flex flex-wrap gap-2 mb-3">
               <button class="btn btn-primary" type="button" data-act="export">${icon('download')} Export all data (.json)</button>
-              <label class="btn btn-outline-primary mb-0" for="imp-file">${icon('upload')} Import…</label>
-              <input id="imp-file" type="file" class="visually-hidden" accept=".json,.cho,.chopro,.chordpro,.txt,application/json,text/plain" multiple>
+              <button class="btn btn-outline-primary" type="button" data-pick-file="imp-file">${icon('upload')} Import…</button>
+              <input id="imp-file" type="file" class="d-none" tabindex="-1" aria-hidden="true" accept=".json,.cho,.chopro,.chordpro,.txt,application/json,text/plain" multiple>
             </div>
             <div class="dropzone small text-body-secondary" id="drop">${icon('cloud-arrow-up')} …or drop a backup file here. You'll see a preview and can merge or replace.</div>
           </section>
@@ -158,6 +158,7 @@ export default {
     offs.push(on(el, 'change', '[data-bool]', (e, t) => updateSettings({ [t.dataset.bool]: t.checked })));
     offs.push(on(el, 'change', '#def-inst', (e) => updateSettings({ instrumentId: e.target.value })));
     offs.push(on(el, 'change', '#vol', (e) => updateSettings({ volume: Number(e.target.value) })));
+    offs.push(on(el, 'click', '[data-pick-file]', (e, t) => el.querySelector(`#${t.dataset.pickFile}`).click()));
     offs.push(on(el, 'change', '#imp-file', async (e) => { const f = [...e.target.files]; e.target.value = ''; if (f.length) { await importFiles(f); drawInfo(); } }));
     offs.push(on(el, 'click', '[data-del-tuning]', async (e, t) => {
       const id = t.dataset.delTuning;

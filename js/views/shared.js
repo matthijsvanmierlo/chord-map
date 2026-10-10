@@ -49,7 +49,18 @@ export function modeOptions(selected) {
 }
 
 export function emptyState(iconName, title, text, actionHtml = '', level = 'h2') {
-  return `<div class="empty-state surface">${icon(iconName)}<${level} class="h4 mt-3">${escapeHtml(title)}</${level}><p class="lead-soft">${escapeHtml(text)}</p>${actionHtml}</div>`;
+  return `<div class="empty-state surface">
+    ${icon(iconName, 'empty-state-icon')}
+    <${level} class="h4 mt-3">${escapeHtml(title)}</${level}>
+    <p class="lead-soft">${escapeHtml(text)}</p>
+    ${actionHtml ? `<div class="empty-state-actions">${actionHtml}</div>` : ''}
+  </div>`;
+}
+
+/** Standard empty-state actions: explore presets / build a new song (wire data-act="new" with bindNewSong). */
+export function startActionsHTML() {
+  return `<a class="btn btn-primary" href="#/explore">${icon('compass')} Explore progressions</a>
+    <button class="btn btn-outline-primary" type="button" data-act="new">${icon('plus-lg')} New song</button>`;
 }
 
 /** Full-page "not found" state (carries the page's h1). */

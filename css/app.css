@@ -89,10 +89,10 @@ main { flex: 1 0 auto; outline: none; }
 .hero { background: linear-gradient(135deg, var(--fp-highlight), transparent 60%), var(--fp-surface); border: 1px solid var(--fp-border); border-radius: 1.25rem; padding: clamp(1.5rem, 4vw, 3rem); }
 .hero h1 { font-size: clamp(1.8rem, 4vw, 2.75rem); font-weight: 800; letter-spacing: -.03em; }
 .action-card { display: block; height: 100%; text-decoration: none; color: inherit; padding: 1.5rem; }
-.action-card .bi { font-size: 2rem; color: var(--fp-brand); }
+.action-card > .bi { font-size: 2rem; color: var(--fp-brand); }
 .style-chip-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .75rem; }
 .style-tile { display: flex; align-items: center; gap: .6rem; padding: .85rem 1rem; text-decoration: none; color: inherit; }
-.style-tile .bi { font-size: 1.35rem; color: var(--fp-accent); }
+.style-tile > .bi { font-size: 1.35rem; color: var(--fp-accent); }
 
 /* Filter chips */
 .chip-row { display: flex; flex-wrap: wrap; gap: .4rem; }
@@ -178,7 +178,10 @@ main { flex: 1 0 auto; outline: none; }
 
 /* Misc */
 .empty-state { text-align: center; padding: 3rem 1rem; }
-.empty-state .bi { font-size: 3rem; color: var(--fp-brand); }
+.empty-state-icon { display: inline-block; font-size: 3rem; line-height: 1; color: var(--fp-brand); }
+.empty-state-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: .5rem; }
+/* icons inside buttons always follow the button's own text size and colour */
+.btn .bi { font-size: inherit; line-height: 1; }
 .kbd-list kbd { background: var(--fp-surface-2); color: inherit; border: 1px solid var(--fp-border); }
 .dropzone { border: 2px dashed var(--fp-border); border-radius: 1rem; padding: 1.5rem; text-align: center; }
 .dropzone.dragover { border-color: var(--fp-brand); background: var(--fp-highlight); }

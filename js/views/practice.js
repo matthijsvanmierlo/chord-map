@@ -1,6 +1,7 @@
 // Practice mode: big current/next chord, synced notation highlight, tempo
 // control, count-in, loop by section, metronome-only and a speed trainer.
-import { getSong, getState, getSettings, updateSettings, updateMeta } from '../state/store.js';
+import { getSong, getState, getSettings, updateSettings, updateMeta, createSong, subscribe } from '../state/store.js';
+import { navigate } from '../router.js';
 import { getPreset } from '../data/presets/index.js';
 import { presetToSong, timeline, playOrder } from '../music/song.js';
 import { getTuning } from '../music/tunings.js';
@@ -13,7 +14,7 @@ import { player } from '../audio/player.js';
 import { getPattern, patternLabel } from '../data/strumPatterns.js';
 import { escapeHtml, icon, on, announce, formatDate, debounce } from '../ui/dom.js';
 import { toast } from '../ui/feedback.js';
-import { emptyState, notFound } from './shared.js';
+import { emptyState, notFound, startActionsHTML } from './shared.js';
 import { keyLabel } from '../music/theory.js';
 
 function pickerHTML() {
@@ -25,7 +26,7 @@ function pickerHTML() {
         <span><strong>${escapeHtml(s.title)}</strong> <span class="small text-body-secondary">· ${escapeHtml(keyLabel(s.key))} · ${s.tempo} bpm</span></span>
         <span class="small text-body-secondary">${formatDate(s.updatedAt)}</span>
       </a>`).join('')}</div>`
-    : emptyState('music-note-list', 'No songs yet', 'Save a progression from Explore or build your own first.', `<a class="btn btn-primary" href="#/explore">${icon('compass')} Explore progressions</a>`)}`;
+    : emptyState('music-note-list', 'No songs yet', 'Save a progression from Explore or build your own first.', startActionsHTML())}`;
 }
 
 export default {
@@ -45,8 +46,18 @@ export default {
       }
     }
     if (!song) {
-      el.innerHTML = params.id || query.preset ? notFound('question-circle', 'Not found', 'That song or progression is not available in this browser.', '<a class="btn btn-primary" href="#/practice">Choose another</a>') : pickerHTML();
-      return null;
+      if (params.id || query.preset) {
+        el.innerHTML = notFound('question-circle', 'Not found', 'That song or progression is not available in this browser.', '<a class="btn btn-primary" href="#/practice">Choose another</a>');
+        return null;
+      }
+      // song picker: stays live if songs change (e.g. imported in another tab)
+      el.innerHTML = pickerHTML();
+      const offNew = on(el, 'click', '[data-act="new"]', () => {
+        const s = createSong({ title: 'My progression', instrumentId: getSettings().instrumentId });
+        navigate(`song/${s.id}`);
+      });
+      const offSub = subscribe((_s, reason) => { if (['songs', 'replaced', 'external'].includes(reason)) el.innerHTML = pickerHTML(); });
+      return () => { offNew(); offSub(); };
     }
 
     const settings = getSettings();
