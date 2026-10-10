@@ -1,0 +1,21 @@
+{
+  "cdnBase": "https://cdn.jsdelivr.net/npm/",
+  "libraries": [
+    { "name": "bootstrap-css", "type": "css", "package": "bootstrap", "version": "5.3.8",
+      "file": "dist/css/bootstrap.min.css", "local": "vendor/bootstrap/bootstrap.min.css" },
+    { "name": "bootstrap-icons", "type": "css", "package": "bootstrap-icons", "version": "1.13.1",
+      "file": "font/bootstrap-icons.min.css", "local": "vendor/bootstrap-icons/bootstrap-icons.min.css",
+      "extras": [
+        { "file": "font/fonts/bootstrap-icons.woff2", "local": "vendor/bootstrap-icons/fonts/bootstrap-icons.woff2" },
+        { "file": "font/fonts/bootstrap-icons.woff", "local": "vendor/bootstrap-icons/fonts/bootstrap-icons.woff" }
+      ] },
+    { "name": "bootstrap-js", "type": "js", "package": "bootstrap", "version": "5.3.8",
+      "file": "dist/js/bootstrap.bundle.min.js", "local": "vendor/bootstrap/bootstrap.bundle.min.js", "global": "bootstrap" },
+    { "name": "vexflow", "type": "js", "package": "vexflow", "version": "4.2.5",
+      "file": "build/cjs/vexflow.js", "local": "vendor/vexflow/vexflow.js", "global": "Vex" },
+    { "name": "tone", "type": "js", "package": "tone", "version": "15.1.22",
+      "file": "build/Tone.js", "local": "vendor/tone/Tone.js", "global": "Tone" },
+    { "name": "sortable", "type": "js", "package": "sortablejs", "version": "1.15.6",
+      "file": "Sortable.min.js", "local": "vendor/sortable/Sortable.min.js", "global": "Sortable" }
+  ]
+}

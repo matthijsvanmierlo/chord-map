@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Seed demo data</title></head>
+<body>
+<p>Dev fixture: seeds a demo song into localStorage, then opens <code>?go=</code> route (default: My Songs).
+Usage: <code>/tests/seed.html?go=song/demo-song</code></p>
+<script type="module">
+  import { PRESETS } from '../js/data/presets/index.js';
+  import { presetToSong } from '../js/music/song.js';
+  import { sanitizeState } from '../js/state/schema.js';
+  const p = PRESETS.find((x) => x.id === 'jazz-ii-v-i-major');
+  const song = presetToSong(p, { tonic: 'C' });
+  song.id = 'demo-song';
+  song.title = 'Demo: ii–V–I + blues';
+  song.sections.push({ ...presetToSong(PRESETS.find((x) => x.style === 'blues')).sections[0], name: 'Blues', repeat: 2 });
+  song.form = [song.sections[0].id, song.sections[1].id, song.sections[0].id];
+  const state = sanitizeState({ songs: [song], settings: { tourDone: true } });
+  localStorage.setItem('fretboard-progressions:v1', JSON.stringify({ app: 'fretboard-progressions', schemaVersion: 1, ...state }));
+  const go = new URLSearchParams(location.search).get('go') || 'songs';
+  location.replace('../#/' + go);
+</script>
+</body></html>

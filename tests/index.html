@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Tests</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body style="font-family: system-ui, sans-serif; padding: 1rem">
+<h1>Fretboard Progressions — unit tests</h1>
+<div id="results">Running…</div>
+<script type="module">
+  import { report } from './harness.js';
+  const files = ['theory', 'chords', 'roman', 'voicings', 'presets', 'schema', 'exports'];
+  for (const f of files) {
+    try { await import(`./${f}.test.js`); }
+    catch (e) {
+      const { test } = await import('./harness.js');
+      test(`load ${f}.test.js`, () => { throw e; });
+    }
+  }
+  report();
+</script>
+</body>
+</html>

@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>E2E</title>
+<style>body{font-family:system-ui,sans-serif;padding:1rem} iframe{width:1200px;height:900px;border:1px solid #ccc}</style></head>
+<body>
+<h1>Fretboard Progressions — end-to-end tests</h1>
+<p>Drives the real app in the iframe below. <strong>Warning:</strong> clears this site's saved data.
+Run headless: <code>chromium --headless --autoplay-policy=no-user-gesture-required --dump-dom http://localhost:8000/tests/e2e.html</code></p>
+<div id="results">Running…</div>
+<script>
+  // ?hold: keep the page "loading" until tests finish (used by scripts/run-e2e.sh so audio runs in real time)
+  if (location.search.includes('hold')) document.write('<img src="/__hold" alt="" hidden>');
+</script>
+<iframe id="app" title="App under test"></iframe>
+<script type="module">
+  const results = [];
+  const frame = document.getElementById('app');
+  const W = () => frame.contentWindow;
+  const D = () => frame.contentDocument;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  async function waitFor(fn, ms = 8000, label = 'condition') {
+    const t0 = performance.now();
+    while (performance.now() - t0 < ms) {
+      try { const v = fn(); if (v) return v; } catch { /* retry */ }
+      await sleep(50);
+    }
+    throw new Error(`Timed out waiting for ${label}`);
+  }
+  const $ = (sel) => D().querySelector(sel);
+  const $$ = (sel) => [...D().querySelectorAll(sel)];
+  const click = async (sel) => { const el = await waitFor(() => (typeof sel === 'string' ? $(sel) : sel()), 8000, String(sel)); el.click(); await sleep(150); return el; };
+  const go = async (hash) => { W().location.hash = hash; await sleep(400); };
+  const appModule = (path) => W().eval(`import(${JSON.stringify(new URL(path, W().location.href).href)})`);
+  const stored = () => JSON.parse(W().localStorage.getItem('fretboard-progressions:v1') || '{}');
+  async function step(name, fn) {
+    try {
+      await Promise.race([fn(), sleep(25000).then(() => { throw new Error('step timed out'); })]);
+      results.push({ name, ok: true });
+    }
+    catch (e) { results.push({ name, ok: false, error: e.message }); }
+  }
+  function assert(c, m) { if (!c) throw new Error(m); }
+  const setVal = (el, v, ev = 'change') => { el.value = v; el.dispatchEvent(new Event(ev, { bubbles: true })); };
+
+  localStorage.removeItem('fretboard-progressions:v1');
+  frame.src = '../index.html#/';
+  await new Promise((r) => frame.addEventListener('load', r, { once: true }));
+  await waitFor(() => $('h1') && !$('.boot-loading'), 15000, 'app boot');
+
+  await step('home renders with style tiles', async () => {
+    await waitFor(() => $$('.style-tile').length >= 10, 5000, 'style tiles');
+  });
+
+  await step('explore filters by style and search', async () => {
+    await go('#/explore');
+    await waitFor(() => $$('.prog-card').length > 50, 8000, 'cards');
+    await click('[data-style="blues"]');
+    await waitFor(() => $$('.prog-card').length > 0 && $$('.prog-card .badge-style').every((b) => /Blues/.test(b.textContent)), 3000, 'blues only');
+    const q = $('#f-q'); setVal(q, 'pachelbel', 'input');
+    await click('[data-style=""]');
+    await waitFor(() => $$('.prog-card').length >= 1 && $$('.prog-card').length < 5, 3000, 'search narrows');
+  });
+
+  await step('explore "Save as song" creates a song', async () => {
+    const before = (stored().songs || []).length;
+    await click('[data-act="save"]');
+    await sleep(400);
+    assert((stored().songs || []).length === before + 1, 'song not saved');
+  });
+
+  await step('progression page: key change transposes chords', async () => {
+    await go('#/progression/jazz-ii-v-i-major');
+    await waitFor(() => $('#sheet svg.chord-diagram'), 8000, 'diagrams');
+    setVal($('#key-sel'), 'Bb');
+    await waitFor(() => /Cm7/.test($('.chord-line')?.textContent || ''), 4000, 'Cm7 in Bb');
+    await waitFor(() => $('#sheet .notation-host svg'), 4000, 'notation');
+  });
+
+  let songId;
+  await step('new song from My Songs opens editor', async () => {
+    await go('#/songs');
+    await click('[data-act="new"]');
+    await waitFor(() => /#\/song\//.test(W().location.hash), 4000, 'editor route');
+    songId = W().location.hash.split('/').pop();
+    await waitFor(() => $('#f-title'), 4000, 'title input');
+    assert($$('.bar-tile').length === 1, 'expected 1 bar');
+  });
+
+  await step('quick-add bar, undo, redo', async () => {
+    await click('[data-quick="F"]');
+    await waitFor(() => $$('.bar-tile').length === 2, 3000, '2 bars');
+    await click('[data-act="undo"]');
+    await waitFor(() => $$('.bar-tile').length === 1, 3000, 'undo to 1 bar');
+    await click('[data-act="redo"]');
+    await waitFor(() => $$('.bar-tile').length === 2, 3000, 'redo to 2 bars');
+  });
+
+  await step('text mode applies a chord chart', async () => {
+    await click('[data-act="textmode"]');
+    const ta = await waitFor(() => $('[data-sec-text]'), 3000, 'textarea');
+    ta.value = 'Am | F | C G | Dm7 . . G7';
+    await click('[data-sec-act="apply-text"]');
+    await click('[data-act="textmode"]');
+    await waitFor(() => $$('.bar-tile').length === 4, 3000, '4 bars');
+    const song = stored().songs.find((s) => s.id === songId);
+    const last = song.sections[0].bars[3].chords.map((c) => `${c.symbol}:${c.beats}`).join(' ');
+    assert(last === 'Dm7:3 G7:1', `got ${last}`);
+  });
+
+  await step('chord editor changes a chord and beats', async () => {
+    await click('.chord-pill');
+    const input = await waitFor(() => D().querySelector('#ce-symbol'), 4000, 'chord editor');
+    await sleep(400);
+    setVal(input, 'Am7', 'input');
+    await click(() => D().querySelector('#chord-editor [data-bs-dismiss="offcanvas"].btn-primary'));
+    await sleep(500);
+    const song = stored().songs.find((s) => s.id === songId);
+    assert(song.sections[0].bars[0].chords[0].symbol === 'Am7', 'chord not changed');
+  });
+
+  await step('transpose up a semitone', async () => {
+    await click('[data-act="transpose"][data-step="1"]');
+    await sleep(300);
+    const song = stored().songs.find((s) => s.id === songId);
+    assert(song.key.tonic === 'Db', `key ${song.key.tonic}`);
+    assert(song.sections[0].bars[0].chords[0].symbol === 'Bbm7', `chord ${song.sections[0].bars[0].chords[0].symbol}`);
+  });
+
+  await step('editor preview renders notation', async () => {
+    await waitFor(() => $('#preview .notation-host svg'), 5000, 'preview svg');
+  });
+
+  await step('practice: playback advances chords', async () => {
+    await go(`#/practice/${songId}`);
+    await waitFor(() => $('#play'), 4000, 'play button');
+    $('#o-countin').click(); await sleep(50);
+    setVal($('#tempo'), '240', 'input');
+    await click('#play');
+    await waitFor(() => /Stop/.test($('#play').textContent), 6000, 'playing state');
+    const first = $('.practice-bar.current')?.textContent;
+    await waitFor(() => $('.practice-bar.current') && $('.practice-bar.current').textContent !== first, 8000, 'current bar moves');
+    assert($('#sheet .bar-hl'), 'notation highlight missing');
+    await click('#play');
+    await waitFor(() => /Start/.test($('#play').textContent), 3000, 'stopped');
+  });
+
+  await step('backup export → wipe → import restores songs', async () => {
+    const { buildBackup } = await import('../js/export/backup.js');
+    const state = stored();
+    const backup = JSON.stringify(buildBackup({ songs: state.songs, settings: state.settings, meta: state.meta }));
+    const count = state.songs.length;
+    const store = await appModule('js/state/store.js');
+    store.replaceAll({ songs: [], settings: state.settings, meta: state.meta });
+    assert(stored().songs.length === 0, 'not wiped');
+    const importer = await appModule('js/ui/importer.js');
+    const p = importer.importFiles([new (W().File)([backup], 'backup.json', { type: 'application/json' })]);
+    const btn = await waitFor(() => [...D().querySelectorAll('.modal.show .modal-footer .btn-primary')].find((b) => /Import/.test(b.textContent)), 5000, 'import dialog');
+    btn.click();
+    await p;
+    await sleep(300);
+    assert(stored().songs.length === count, `restored ${stored().songs.length}/${count}`);
+  });
+
+  await step('ChordPro import creates a song', async () => {
+    const importer = await appModule('js/ui/importer.js');
+    const before = stored().songs.length;
+    await importer.importFiles([new (W().File)(['{title: Test}\n{key: G}\n{start_of_chorus: Chorus}\n| [G] | [C] [D] |\n{end_of_chorus}'], 'test.cho', { type: 'text/plain' })]);
+    await sleep(300);
+    const s = stored().songs.find((x) => x.title === 'Test');
+    assert(stored().songs.length === before + 1 && s && s.sections[0].name === 'Chorus', 'chordpro import failed');
+  });
+
+  await step('settings: theme and instrument switch apply', async () => {
+    await go('#/settings');
+    await click('#th-dark');
+    await waitFor(() => D().documentElement.getAttribute('data-bs-theme') === 'dark', 3000, 'dark theme');
+    await click('#th-light');
+    setVal($('#global-instrument'), 'ukulele-standard');
+    await sleep(600);
+    assert(stored().settings.instrumentId === 'ukulele-standard', 'instrument not saved');
+    await go('#/chords?c=C');
+    await waitFor(() => $('#grid svg') && $('#grid svg').getAttribute('aria-label').includes('A string'), 5000, 'uke diagrams');
+  });
+
+  await step('sheet exports as valid SVG and rasterises to PNG', async () => {
+    await go(`#/song/${songId}`);
+    await waitFor(() => $('#preview .notation-host svg'), 6000, 'preview');
+    const { composeSVG } = await appModule('js/export/image.js');
+    const song = stored().songs.find((s) => s.id === songId);
+    const svg = composeSVG($('#preview .lead-sheet'), song);
+    const doc = new DOMParser().parseFromString(svg, 'image/svg+xml');
+    assert(!doc.querySelector('parsererror'), 'SVG parse error');
+    assert(!/currentColor|var\(--/.test(svg), 'theme variables left in export');
+    const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
+    await new Promise((res, rej) => { const img = new Image(); img.onload = res; img.onerror = () => rej(new Error('PNG rasterise failed')); img.src = url; });
+  });
+
+  await step('libraries load from local vendor/ copies (CDN fallback path)', async () => {
+    await go('#/settings');
+    await click('#o-local');
+    const store = await appModule('js/state/store.js');
+    store.flush();
+    assert(stored().settings.localLibsOnly === true, 'setting not saved');
+    W().location.reload();
+    await sleep(500);
+    await waitFor(() => W().VENDOR_REPORT && Object.keys(W().VENDOR_REPORT).length === 6, 10000, 'vendor report');
+    const rep = W().VENDOR_REPORT;
+    assert(Object.values(rep).every((v) => v === 'local'), JSON.stringify(rep));
+    assert(W().Vex && W().Tone && W().bootstrap && W().Sortable, 'globals missing');
+  });
+
+  await step('every route renders an h1 without error', async () => {
+    for (const r of ['#/', '#/explore', '#/songs', '#/chords', '#/practice', '#/settings', '#/help', `#/song/${songId}`, `#/print/${songId}?noprint=1`]) {
+      await go(r);
+      await waitFor(() => $('#view h1') || $('#view .alert-danger'), 6000, `h1 on ${r}`);
+      assert(!$('#view .alert-danger'), `error on ${r}: ${$('#view .alert-danger')?.textContent}`);
+    }
+  });
+
+  const failed = results.filter((r) => !r.ok);
+  const out = document.getElementById('results');
+  out.innerHTML = `<p id="summary">${results.length - failed.length}/${results.length} passed${failed.length ? ` — ${failed.length} FAILED` : ' — ALL PASS'}</p><ul>${results.map((r) => `<li>${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.error ? '  →  ' + r.error : ''}</li>`).join('')}</ul>`;
+  document.title = failed.length ? 'FAIL' : 'PASS';
+  localStorage.removeItem('fretboard-progressions:v1');
+  if (location.search.includes('hold')) fetch('/__done');
+</script>
+</body></html>
